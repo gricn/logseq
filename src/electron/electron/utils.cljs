@@ -2,7 +2,7 @@
   (:require ["@logseq/rsapi" :as rsapi]
             ["electron" :refer [app BrowserWindow]]
             ["fs-extra" :as fs]
-            ["path" :as path]
+            ["path" :as node-path]
             [clojure.string :as string]
             [electron.configs :as cfgs]
             [electron.logger :as logger]
@@ -26,7 +26,8 @@
 (defonce *fetchAgent (atom nil))
 
 (defonce open (js/require "open"))
-(defonce HttpsProxyAgent (js/require "https-proxy-agent"))
+(defonce HttpsProxyAgent (.-HttpsProxyAgent (js/require "https-proxy-agent")))
+(defonce SocksProxyAgent (.-SocksProxyAgent (js/require "socks-proxy-agent")))
 (defonce _fetch (js/require "node-fetch"))
 (defonce extract-zip (js/require "extract-zip"))
 
@@ -35,23 +36,38 @@
   ([url options]
    (_fetch url (bean/->js (merge options {:agent @*fetchAgent})))))
 
+(defn fix-win-path!
+  [path]
+  (when (not-empty path)
+    (if win32?
+      (string/replace path "\\" "/")
+      path)))
+
+(defn to-native-win-path!
+  "Convert path to native win path"
+  [path]
+  (when (not-empty path)
+    (if win32?
+      (string/replace path "/" "\\")
+      path)))
+
 (defn get-ls-dotdir-root
   []
-  (let [lg-dir (path/join (.getPath app "home") ".logseq")]
-    (if-not (fs/existsSync lg-dir)
-      (do (fs/mkdirSync lg-dir) lg-dir)
-      lg-dir)))
+  (let [lg-dir (node-path/join (.getPath app "home") ".logseq")]
+    (when-not (fs/existsSync lg-dir)
+      (fs/mkdirSync lg-dir))
+    (fix-win-path! lg-dir)))
 
 (defn get-ls-default-plugins
   []
-  (let [plugins-root (path/join (get-ls-dotdir-root) "plugins")
+  (let [plugins-root (node-path/join (get-ls-dotdir-root) "plugins")
         _ (when-not (fs/existsSync plugins-root)
             (fs/mkdirSync plugins-root))
         dirs (js->clj (fs/readdirSync plugins-root #js{"withFileTypes" true}))
         dirs (->> dirs
                   (filter #(.isDirectory %))
                   (filter (fn [f] (not (some #(string/starts-with? (.-name f) %) ["_" "."]))))
-                  (map #(path/join plugins-root (.-name %))))]
+                  (map #(node-path/join plugins-root (.-name %))))]
     dirs))
 
 (defn- set-fetch-agent-proxy
@@ -60,7 +76,12 @@
   [{:keys [protocol host port]}]
   (if (and protocol host port (or (= protocol "http") (= protocol "socks5")))
     (let [proxy-url (str protocol "://" host ":" port)]
-      (reset! *fetchAgent (new HttpsProxyAgent proxy-url)))
+      (condp = protocol
+        "http"
+        (reset! *fetchAgent (new HttpsProxyAgent proxy-url))
+        "socks5"
+        (reset! *fetchAgent (new SocksProxyAgent proxy-url))
+        (logger/error "Unknown proxy protocol:" protocol)))
     (reset! *fetchAgent nil)))
 
 (defn- set-rsapi-proxy
@@ -191,35 +212,11 @@
     (cfgs/set-item! :settings/agent {:type type :test test})
     (cfgs/set-item! :settings/agent {:type type :protocol type :host host :port port :test test})))
 
-
-(defn ignored-path?
-  "Ignore given path from file-watcher notification"
-  [dir path]
-  (when (string? path)
-    (or
-     (some #(string/starts-with? path (str dir "/" %))
-           ["." ".recycle" "node_modules" "logseq/bak" "version-files"])
-     (some #(string/includes? path (str "/" % "/"))
-           ["." ".recycle" "node_modules" "logseq/bak" "version-files"])
-     (some #(string/ends-with? path %)
-           [".DS_Store" "logseq/graphs-txid.edn"])
-     ;; hidden directory or file
-     (let [relpath (path/relative dir path)]
-       (or (re-find #"/\.[^.]+" relpath)
-           (re-find #"^\.[^.]+" relpath))))))
-
 (defn should-read-content?
   "Skip reading content of file while using file-watcher"
   [path]
-  (let [ext (string/lower-case (path/extname path))]
+  (let [ext (string/lower-case (node-path/extname path))]
     (contains? #{".md" ".markdown" ".org" ".js" ".edn" ".css"} ext)))
-
-(defn fix-win-path!
-  [path]
-  (when path
-    (if win32?
-      (string/replace path "\\" "/")
-      path)))
 
 (defn read-file
   [path]
@@ -261,7 +258,8 @@
 (defn get-graph-dir
   "required by all internal state in the electron section"
   [graph-name]
-  (string/replace graph-name "logseq_local_" ""))
+  (when (string/includes? graph-name "logseq_local_")
+    (string/replace-first graph-name "logseq_local_" "")))
 
 (defn get-graph-name
   "reversing `get-graph-dir`"

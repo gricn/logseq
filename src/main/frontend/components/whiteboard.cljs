@@ -10,19 +10,17 @@
             [frontend.db.model :as model]
             [frontend.handler.common :as common-handler]
             [frontend.handler.route :as route-handler]
-            [frontend.handler.user :as user-handler]
-            [frontend.handler.config :as config-handler]
             [frontend.handler.whiteboard :as whiteboard-handler]
+            [frontend.modules.shortcut.core :as shortcut]
             [frontend.rum :refer [use-bounding-client-rect use-breakpoint
                                   use-click-outside]]
             [frontend.state :as state]
-            [frontend.storage :as storage]
-            [frontend.config :as config]
             [frontend.ui :as ui]
             [frontend.util :as util]
             [promesa.core :as p]
             [rum.core :as rum]
-            [shadow.loader :as loader]))
+            [shadow.loader :as loader]
+            [frontend.config :as config]))
 
 (defonce tldraw-loaded? (atom false))
 (rum/defc tldraw-app < rum/reactive
@@ -53,7 +51,7 @@
 
 ;; TODO: use frontend.ui instead of making a new one
 (rum/defc dropdown
-  [label children show? outside-click-hander portal?]
+  [label children show? outside-click-handler portal?]
   (let [[anchor-ref anchor-rect] (use-bounding-client-rect show?)
         [content-ref content-rect] (use-bounding-client-rect show?)
         offset-x (when (and anchor-rect content-rect)
@@ -67,7 +65,7 @@
                      (* 0.5 (- (.-width anchor-rect) (.-width content-rect)))))
         offset-y (when (and anchor-rect content-rect)
                    (+ (.-y anchor-rect) (.-height anchor-rect) 8))
-        click-outside-ref (use-click-outside outside-click-hander)
+        click-outside-ref (use-click-outside outside-click-handler)
         [d-open set-d-open] (rum/use-state false)
         _ (rum/use-effect! (fn [] (js/setTimeout #(set-d-open show?) 100))
                            [show?])]
@@ -122,8 +120,9 @@
                                         portal?]
                                  :or {portal? true}}]
    (let [page-entity (model/get-page page-name-or-uuid)
+         page (model/sub-block (:db/id page-entity))
          block-uuid (:block/uuid page-entity)
-         refs-count (model/get-block-references-count block-uuid)]
+         refs-count (count (:block/_refs page))]
      (when (> refs-count 0)
        (dropdown-menu {:classname classname
                        :label (fn [open?]
@@ -147,7 +146,7 @@
   [page-name]
   (let [page-entity (model/get-page page-name)
         {:block/keys [updated-at created-at]} page-entity]
-    (str (if (= created-at updated-at) "Created " "Edited ")
+    (str (if (= created-at updated-at) (t :whiteboard/dashboard-card-created) (t :whiteboard/dashboard-card-edited))
          (util/time-ago (js/Date. updated-at)))))
 
 (rum/defc dashboard-preview-card
@@ -189,9 +188,9 @@
     (fn [e]
       (util/stop e)
       (whiteboard-handler/create-new-whiteboard-and-redirect!))}
-   (ui/icon "plus")
+   (ui/icon "plus" {:size 32})
    [:span.dashboard-create-card-caption.select-none
-    "New whiteboard"]])
+    (t :whiteboard/dashboard-card-new-whiteboard)]])
 
 (rum/defc whiteboard-dashboard
   []
@@ -213,30 +212,27 @@
           has-checked? (not-empty checked-page-names)]
       [:<>
        [:h1.select-none.flex.items-center.whiteboard-dashboard-title.title
-        [:div "All whiteboards"
+        [:div (t :all-whiteboards)
          [:span.opacity-50
           (str " · " total-whiteboards)]]
         [:div.flex-1]
         (when has-checked?
-          [:button.ui__button.m-0.py-1.inline-flex.items-center.bg-red-800
-           {:on-click
+          (ui/button
+           (count checked-page-names)
+           {:icon "trash"
+            :on-click
             (fn []
               (state/set-modal! (page/batch-delete-dialog
                                  (map (fn [name]
                                         (some (fn [w] (when (= (:block/name w) name) w)) whiteboards))
                                       checked-page-names)
-                                 false route-handler/redirect-to-whiteboard-dashboard!)))}
-           [:span.flex.gap-2.items-center
-            [:span.opacity-50 (ui/icon "trash" {:style {:font-size 15}})]
-            (t :delete)
-            [:span.opacity-50
-             (str " · " (count checked-page-names))]]])]
+                                 false route-handler/redirect-to-whiteboard-dashboard!)))}))]
        [:div
         {:ref ref}
         [:div.gap-8.grid.grid-rows-auto
          {:style {:visibility (when (nil? container-width) "hidden")
                   :grid-template-columns (str "repeat(" cols ", minmax(0, 1fr))")}}
-         (dashboard-create-card)
+         (when-not config/publishing? (dashboard-create-card))
          (for [whiteboard-name whiteboard-names]
            [:<> {:key whiteboard-name}
             (dashboard-preview-card whiteboard-name
@@ -265,6 +261,7 @@
               :-webkit-font-smoothing "subpixel-antialiased"}}
 
      [:div.whiteboard-page-title-root
+      {:data-html2canvas-ignore true} ; excludes title component from image export
       [:div.whiteboard-page-title
        {:style {:color "var(--ls-primary-text-color)"
                 :user-select "none"}
@@ -286,34 +283,22 @@
                          "text-md px-3 py-2 cursor-default whiteboard-page-refs-count"
                          {:hover? true
                           :render-fn (fn [open? refs-count] [:span.whiteboard-page-refs-count-label
-                                                             (if (> refs-count 1) "References" "Reference")
+                                                             (t :whiteboard/reference-count refs-count)
                                                              (ui/icon (if open? "references-hide" "references-show")
                                                                       {:extension? true})])})]]
      (tldraw-app page-name block-id)]))
 
-(rum/defc whiteboard-route
+(rum/defc whiteboard-route <
+(shortcut/mixin :shortcut.handler/whiteboard false)
   [route-match]
-  (when (user-handler/feature-available? :whiteboard)
-    (let [name (get-in route-match [:parameters :path :name])
-          {:keys [block-id]} (get-in route-match [:parameters :query])]
-      (whiteboard-page name block-id))))
-
-(defn onboarding-show
-  []
-  (when (and (user-handler/feature-available? :whiteboard)
-             (not (or (state/sub :whiteboard/onboarding-tour?)
-                      (config/demo-graph?)
-                      (util/mobile?))))
-    (state/pub-event! [:whiteboard/onboarding])
-    (state/set-state! [:whiteboard/onboarding-tour?] true)
-    (storage/set :whiteboard-onboarding-tour? true)))
+  (let [name (get-in route-match [:parameters :path :name])
+        {:keys [block-id]} (get-in route-match [:parameters :query])]
+    (whiteboard-page name block-id)))
 
 (rum/defc onboarding-welcome
   [close-fn]
   [:div.cp__whiteboard-welcome
-   [:span.head-bg
-
-    [:strong (t :on-boarding/closed-feature (name (:whiteboard user-handler/feature-matrix)))]]
+   [:span.head-bg]
 
    [:h1.text-2xl.font-bold.flex-col.sm:flex-row
     (t :on-boarding/welcome-whiteboard-modal-title)]
@@ -321,10 +306,12 @@
    [:p (t :on-boarding/welcome-whiteboard-modal-description)]
 
    [:div.pt-6.flex.justify-center.space-x-2.sm:justify-end
-    (ui/button (t :on-boarding/welcome-whiteboard-modal-skip) :on-click close-fn :background "gray" :class "opacity-60")
+    (ui/button (t :on-boarding/welcome-whiteboard-modal-skip)
+               :on-click close-fn
+               :background "gray"
+               :class "opacity-60 skip-welcome")
     (ui/button (t :on-boarding/welcome-whiteboard-modal-start)
                :on-click (fn []
-                           (config-handler/set-config! :feature/enable-whiteboards? true)
                            (quick-tour/ready
                             (fn []
                               (quick-tour/start-whiteboard)

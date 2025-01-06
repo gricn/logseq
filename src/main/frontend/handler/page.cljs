@@ -6,44 +6,47 @@
             [datascript.core :as d]
             [frontend.commands :as commands]
             [frontend.config :as config]
-            [frontend.context.i18n :refer [t]]
             [frontend.date :as date]
             [frontend.db :as db]
-            [logseq.db.schema :as db-schema]
+            [frontend.db.conn :as conn]
             [frontend.db.model :as model]
             [frontend.db.utils :as db-utils]
-            [frontend.db.conn :as conn]
+            [frontend.format.block :as block]
             [frontend.fs :as fs]
             [frontend.handler.common :as common-handler]
+            [frontend.handler.config :as config-handler]
             [frontend.handler.editor :as editor-handler]
+            [frontend.handler.plugin :as plugin-handler]
             [frontend.handler.notification :as notification]
+            [frontend.handler.recent :as recent-handler]
             [frontend.handler.route :as route-handler]
             [frontend.handler.ui :as ui-handler]
             [frontend.handler.web.nfs :as web-nfs]
-            [frontend.handler.config :as config-handler]
-            [frontend.handler.recent :as recent-handler]
+            [frontend.mobile.util :as mobile-util]
             [frontend.modules.outliner.core :as outliner-core]
             [frontend.modules.outliner.file :as outliner-file]
             [frontend.modules.outliner.tree :as outliner-tree]
             [frontend.state :as state]
             [frontend.util :as util]
             [frontend.util.cursor :as cursor]
-            [frontend.util.property :as property]
             [frontend.util.fs :as fs-util]
             [frontend.util.page-property :as page-property]
             [frontend.util.page :as page-util]
+            [frontend.util.property :as property]
+            [frontend.util.url :as url-util]
+            [goog.functions :refer [debounce]]
             [goog.object :as gobj]
             [lambdaisland.glogi :as log]
-            [promesa.core :as p]
-            [frontend.mobile.util :as mobile-util]
-            [logseq.graph-parser.util :as gp-util]
-            [logseq.graph-parser.text :as text]
-            [logseq.graph-parser.config :as gp-config]
+            [logseq.db.schema :as db-schema]
             [logseq.graph-parser.block :as gp-block]
+            [logseq.graph-parser.config :as gp-config]
             [logseq.graph-parser.property :as gp-property]
+            [logseq.graph-parser.text :as text]
+            [logseq.graph-parser.util :as gp-util]
             [logseq.graph-parser.util.page-ref :as page-ref]
-            [frontend.format.block :as block]
-            [goog.functions :refer [debounce]]))
+            [promesa.core :as p]
+            [logseq.common.path :as path]
+            [electron.ipc :as ipc]))
 
 ;; FIXME: add whiteboard
 (defn- get-directory
@@ -62,7 +65,7 @@
     (gp-util/safe-subs s 0 200)))
 
 (defn- build-title [page]
-  ;; Don't wrap `\"` anymore, as tiitle property is not effected by `,` now
+  ;; Don't wrap `\"` anymore, as title property is not effected by `,` now
   ;; The previous extract behavior isn't unwrapping the `'"` either. So no need
   ;; to maintain the compatibility.
   (:block/original-name page))
@@ -162,7 +165,7 @@
              last-txs (build-page-tx format properties (last pages) journal? whiteboard?)
              txs      (concat txs last-txs)]
          (when (seq txs)
-           (db/transact! txs)))
+           (db/transact! repo txs {:outliner-op :create-page})))
 
        (when create-first-block?
          (when (or
@@ -182,7 +185,7 @@
     (when-not (string/blank? file-path)
       (db/transact! [[:db.fn/retractEntity [:file/path file-path]]])
       (when unlink-file?
-        (-> (fs/unlink! repo (config/get-repo-path repo file-path) nil)
+        (-> (fs/unlink! repo (config/get-repo-fpath repo file-path) nil)
             (p/catch (fn [error] (js/console.error error))))))))
 
 (defn- compute-new-file-path
@@ -193,7 +196,7 @@
         ext (last (string/split (last result) "."))
         new-file (str new-file-name-body "." ext)
         parts (concat (butlast result) [new-file])]
-    (string/join "/" parts)))
+    (util/string-join-path parts)))
 
 (defn rename-file!
   "emit file-rename events to :file/rename-event-chan
@@ -339,12 +342,12 @@
 (defn toggle-favorite! []
   ;; NOTE: in journals or settings, current-page is nil
   (when-let [page-name (state/get-current-page)]
-   (let [favorites  (:favorites (state/sub-config))
-         favorited? (contains? (set (map string/lower-case favorites))
-                               (string/lower-case page-name))]
-    (if favorited?
-      (unfavorite-page! page-name)
-      (favorite-page! page-name)))))
+    (let [favorites  (:favorites (state/sub-config))
+          favorited? (contains? (set (map string/lower-case favorites))
+                                (string/lower-case page-name))]
+      (if favorited?
+        (unfavorite-page! page-name)
+        (favorite-page! page-name)))))
 
 (defn delete!
   [page-name ok-handler & {:keys [delete-file?]
@@ -616,30 +619,30 @@
   "Accepts unsanitized page names"
   ([old-name new-name] (rename! old-name new-name true))
   ([old-name new-name redirect?]
-    (let [repo          (state/get-current-repo)
-          old-name      (string/trim old-name)
-          new-name      (string/trim new-name)
-          old-page-name (util/page-name-sanity-lc old-name)
-          new-page-name (util/page-name-sanity-lc new-name)
-          name-changed? (not= old-name new-name)]
-      (if (and old-name
+   (let [repo          (state/get-current-repo)
+         old-name      (string/trim old-name)
+         new-name      (string/trim new-name)
+         old-page-name (util/page-name-sanity-lc old-name)
+         new-page-name (util/page-name-sanity-lc new-name)
+         name-changed? (not= old-name new-name)]
+     (if (and old-name
               new-name
               (not (string/blank? new-name))
               name-changed?)
-        (do
-          (cond
-            (= old-page-name new-page-name)
-            (rename-page-aux old-name new-name redirect?)
+       (do
+         (cond
+           (= old-page-name new-page-name)
+           (rename-page-aux old-name new-name redirect?)
 
-            (db/pull [:block/name new-page-name])
-            (merge-pages! old-page-name new-page-name)
+           (db/pull [:block/name new-page-name])
+           (merge-pages! old-page-name new-page-name)
 
-            :else
-            (rename-namespace-pages! repo old-name new-name))
-          (rename-nested-pages old-name new-name))
-        (when (string/blank? new-name)
-          (notification/show! "Please use a valid name, empty name is not allowed!" :error)))
-      (ui-handler/re-render-root!))))
+           :else
+           (rename-namespace-pages! repo old-name new-name))
+         (rename-nested-pages old-name new-name))
+       (when (string/blank? new-name)
+         (notification/show! "Please use a valid name, empty name is not allowed!" :error)))
+     (ui-handler/re-render-root!))))
 
 (defn- split-col-by-element
   [col element]
@@ -660,6 +663,7 @@
                          (concat (drop-last prev) [from (last prev)] next)
                          (concat prev [from] next))
                        (remove nil?)
+                       (mapv util/safe-page-name-sanity-lc)
                        distinct
                        vec)]
         (config-handler/set-config! :favorites favorites)))))
@@ -789,10 +793,6 @@
       (fn [chosen _click?]
         (state/clear-editor-action!)
         (let [wrapped? (= page-ref/left-brackets (gp-util/safe-subs edit-content (- pos 2) pos))
-              prefix (str (t :new-page) ": ")
-              chosen (if (string/starts-with? chosen prefix) ;; FIXME: What if a page named "New page: XXX"?
-                       (string/replace-first chosen prefix "")
-                       chosen)
               chosen (if (and (util/safe-re-find #"\s+" chosen) (not wrapped?))
                        (page-ref/->page-ref chosen)
                        chosen)
@@ -811,11 +811,7 @@
                                            :command :page-ref})))
       (fn [chosen _click?]
         (state/clear-editor-action!)
-        (let [prefix (str (t :new-page) ": ")
-              chosen (if (string/starts-with? chosen prefix)
-                       (string/replace-first chosen prefix "")
-                       chosen)
-              page-ref-text (get-page-ref-text chosen)]
+        (let [page-ref-text (get-page-ref-text chosen)]
           (editor-handler/insert-command! id
                                           page-ref-text
                                           format
@@ -828,7 +824,8 @@
   []
   (when-let [repo (state/get-current-repo)]
     (when (and (state/enable-journals? repo)
-               (not (state/loading-files? repo)))
+               (not (state/loading-files? repo))
+               (not (state/whiteboard-route?)))
       (state/set-today! (date/today))
       (when (or (config/local-db? repo)
                 (and (= "local" repo) (not (mobile-util/native-platform?))))
@@ -836,23 +833,23 @@
               today-page (util/page-name-sanity-lc title)
               format (state/get-preferred-format repo)
               file-name (date/journal-title->default title)
-              path (str (config/get-journals-directory) "/" file-name "."
-                        (config/get-file-extension format))
-              file-path (str "/" path)
+              file-rpath (str (config/get-journals-directory) "/" file-name "."
+                              (config/get-file-extension format))
               repo-dir (config/get-repo-dir repo)
               template (state/get-default-journal-template)]
-          (p/let [file-exists? (fs/file-exists? repo-dir file-path)
-                  file-content (when file-exists?
-                                 (fs/read-file repo-dir file-path))]
-            (when (and (db/page-empty? repo today-page)
-                       (or (not file-exists?)
-                           (and file-exists? (string/blank? file-content))))
-              (create! title {:redirect? false
-                              :split-namespace? false
-                              :create-first-block? (not template)
-                              :journal? true})
-              (state/pub-event! [:journal/insert-template today-page])
-              (ui-handler/re-render-root!))))))))
+          (when (db/page-empty? repo today-page)
+            (p/let [file-exists? (fs/file-exists? repo-dir file-rpath)
+                    file-content (when file-exists?
+                                   (fs/read-file repo-dir file-rpath))]
+              (when (or (not file-exists?)
+                        (and file-exists? (string/blank? file-content)))
+                (create! title {:redirect? false
+                                :split-namespace? false
+                                :create-first-block? (not template)
+                                :journal? true})
+                (state/pub-event! [:journal/insert-template today-page])
+                (ui-handler/re-render-root!)
+                (plugin-handler/hook-plugin-app :today-journal-created {:title today-page})))))))))
 
 (defn open-today-in-sidebar
   []
@@ -863,16 +860,32 @@
      :page)))
 
 (defn open-file-in-default-app []
-  (if-let [file-path (and (util/electron?) (page-util/get-page-file-path))]
-    (js/window.apis.openPath file-path)
+  (if-let [file-rpath (and (util/electron?) (page-util/get-page-file-rpath))]
+    (let [repo-dir (config/get-repo-dir (state/get-current-repo))
+          file-fpath (path/path-join repo-dir file-rpath)]
+      (js/window.apis.openPath file-fpath))
     (notification/show! "No file found" :warning)))
 
-(defn copy-current-file []
-  (if-let [file-path (and (util/electron?) (page-util/get-page-file-path))]
-    (util/copy-to-clipboard! file-path)
+(defn copy-current-file
+  "FIXME: clarify usage, copy file or copy file path"
+  []
+  (if-let [file-rpath (and (util/electron?) (page-util/get-page-file-rpath))]
+    (let [repo-dir (config/get-repo-dir (state/get-current-repo))
+          file-fpath (path/path-join repo-dir file-rpath)]
+      (util/copy-to-clipboard! file-fpath))
     (notification/show! "No file found" :warning)))
 
 (defn open-file-in-directory []
-  (if-let [file-path (and (util/electron?) (page-util/get-page-file-path))]
-    (js/window.apis.showItemInFolder file-path)
+  (if-let [file-rpath (and (util/electron?) (page-util/get-page-file-rpath))]
+    (let [repo-dir (config/get-repo-dir (state/get-current-repo))
+          file-fpath (path/path-join repo-dir file-rpath)]
+      (ipc/ipc "openFileInFolder" file-fpath))
     (notification/show! "No file found" :warning)))
+
+(defn copy-page-url
+  ([] (copy-page-url (page-util/get-current-page-name)))
+  ([page-name]
+   (if page-name
+     (util/copy-to-clipboard!
+      (url-util/get-logseq-graph-page-url nil (state/get-current-repo) page-name))
+     (notification/show! "No page found to copy" :warning))))

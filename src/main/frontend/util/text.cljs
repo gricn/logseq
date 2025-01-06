@@ -2,8 +2,10 @@
   "Misc low-level utility text fns that are useful across features or don't have
   a good ns to be in yet"
   (:require [clojure.string :as string]
+            [frontend.config :as config]
+            [frontend.util :as util]
             [goog.string :as gstring]
-            [frontend.util :as util]))
+            [logseq.common.path :as path]))
 
 (defonce between-re #"\(between ([^\)]+)\)")
 
@@ -24,7 +26,7 @@
   [col]
   (let [items (map (fn [item] (str "\"" item "\"")) col)]
     (gstring/format "[%s]"
-                 (string/join ", " items))))
+                    (string/join ", " items))))
 
 (defn media-link?
   [media-formats s]
@@ -39,7 +41,7 @@
                           (if (string/starts-with? (string/lower-case line) key)
                             new-line
                             line)))
-                    lines)
+                       lines)
         new-lines (if (not= (map string/trim lines) new-lines)
                     new-lines
                     (cons (first new-lines) ;; title
@@ -94,10 +96,10 @@
   (if (= value "")
     (if before? [0] [(count s)]) ;; Hack: this prevents unnecessary work in wrapped-by?
     (loop [acc []
-          i 0]
-     (if-let [i (string/index-of s value i)]
-       (recur (conj acc i) (+ i (count value)))
-       acc))))
+           i 0]
+      (if-let [i (string/index-of s value i)]
+        (recur (conj acc i) (+ i (count value)))
+        acc))))
 
 (defn wrapped-by?
   "`pos` must be wrapped by `before` and `end` in string `value`, e.g. ((a|b))"
@@ -120,7 +122,7 @@
              ks))))
 
 (defn cut-by
-  "Cut string by specifid wrapping symbols, only match the first occurrence.
+  "Cut string by specified wrapping symbols, only match the first occurrence.
      value - string to cut
      before - cutting symbol (before)
      end - cutting symbol (end)"
@@ -140,11 +142,17 @@
       [value nil nil])))
 
 (defn get-graph-name-from-path
-  [path]
-  (when (string? path)
-    (let [parts (->> (string/split path #"/")
+  "Get `Dir/GraphName` style name for from repo-url.
+
+   On iOS, repo-url might be nil"
+  [repo-url]
+  (when (not-empty repo-url)
+    (let [path (config/get-local-dir repo-url)
+          path (if (path/is-file-url? path)
+                 (path/url-to-path path)
+                 path)
+          parts (->> (string/split path #"/")
                      (take-last 2))]
-      (-> (if (not= (first parts) "0")
-            (string/join "/" parts)
-            (last parts))
-          js/decodeURI))))
+      (if (not= (first parts) "0")
+        (util/string-join-path parts)
+        (last parts)))))

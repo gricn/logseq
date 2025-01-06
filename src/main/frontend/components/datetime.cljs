@@ -46,7 +46,7 @@
   (let [show? (rum/react *show-repeater?)]
     (if (or show? (and num duration kind))
       [:div.w.full.flex.flex-row.justify-left
-       [:input#repeater-num.form-input.mt-1.w-8.px-1.sm:w-20.sm:px-2.text-center
+       [:input#repeater-num.form-input.w-8.mr-2.px-1.sm:w-20.sm:px-2.text-center
         {:default-value num
          :on-change (fn [event]
                       (let [value (util/evalue event)]
@@ -62,11 +62,11 @@
           {:label "w"}
           {:label "m"}
           {:label "y"}])
-        (fn [value]
+        (fn [_e value]
           (swap! *timestamp assoc-in [:repeater :duration] value))
         nil)
 
-       [:a.ml-1.self-center {:on-click (fn []
+       [:a.ml-2.self-center {:on-click (fn []
                                          (reset! *show-repeater? false)
                                          (swap! *timestamp assoc :repeater {}))}
         svg/close]]
@@ -132,7 +132,7 @@
 
      [:p.mt-4
       (ui/button "Submit"
-        :on-click on-submit)]]))
+                 :on-click on-submit)]]))
 
 (rum/defc date-picker < rum/reactive
   {:init (fn [state]
@@ -151,8 +151,8 @@
                                    (contains? #{"deadline" "scheduled"}
                                               (string/lower-case current-command)))
         date (state/sub :date-picker/date)]
-    [:div#date-time-picker.flex.flex-row {:on-click (fn [e] (util/stop e))
-                                          :on-mouse-down (fn [e] (.stopPropagation e))}
+    [:div#date-time-picker.flex.flex-col.sm:flex-row {:on-click (fn [e] (util/stop e))
+                                                      :on-mouse-down (fn [e] (.stopPropagation e))}
      (ui/datepicker
       date
       {:deadline-or-schedule? deadline-or-schedule?
@@ -161,7 +161,7 @@
          (util/stop e)
          (let [date (t/to-default-time-zone date)
                journal (date/journal-name date)]
-           ;; deadline-or-schedule? is handled in on-sumbit, not here
+           ;; deadline-or-schedule? is handled in on-submit, not here
            (when-not deadline-or-schedule?
                ;; similar to page reference
              (editor-handler/insert-command! dom-id

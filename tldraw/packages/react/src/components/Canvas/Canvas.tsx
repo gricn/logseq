@@ -58,11 +58,13 @@ export interface TLCanvasProps<S extends TLReactShape> {
   cursorRotation: number
   selectionRotation: number
   onEditingEnd: () => void
+  penMode: boolean
   showGrid: boolean
   showSelection: boolean
   showHandles: boolean
   showResizeHandles: boolean
   showRotateHandles: boolean
+  showCloneHandles: boolean
   showContextBar: boolean
   showSelectionDetail: boolean
   showSelectionRotation: boolean
@@ -91,6 +93,7 @@ export const Canvas = observer(function Renderer<S extends TLReactShape>({
   showSelectionRotation = false,
   showResizeHandles = true,
   showRotateHandles = true,
+  showCloneHandles = true,
   showSelectionDetail = true,
   showContextBar = true,
   showGrid = true,
@@ -129,7 +132,12 @@ export const Canvas = observer(function Renderer<S extends TLReactShape>({
         {showGrid && components.Grid && <components.Grid size={gridSize} />}
         <HTMLLayer>
           {components.SelectionBackground && selectedShapes && selectionBounds && showSelection && (
-            <Container data-type="SelectionBackground" bounds={selectionBounds} zIndex={2}>
+            <Container
+              data-type="SelectionBackground"
+              bounds={selectionBounds}
+              zIndex={2}
+              data-html2canvas-ignore="true"
+            >
               <components.SelectionBackground
                 shapes={selectedShapes}
                 bounds={selectionBounds}
@@ -163,6 +171,7 @@ export const Canvas = observer(function Renderer<S extends TLReactShape>({
                 isHovered={false}
                 isBinding={false}
                 isSelected={true}
+                isLocked={shape.props.isLocked}
               />
             ))}
           {hoveredShapes.map(
@@ -184,20 +193,23 @@ export const Canvas = observer(function Renderer<S extends TLReactShape>({
               {showSelection && components.SelectionForeground && (
                 <Container
                   data-type="SelectionForeground"
+                  data-html2canvas-ignore="true"
                   bounds={selectionBounds}
                   zIndex={editingShape && selectedShapes.includes(editingShape) ? 1002 : 10002}
                 >
                   <components.SelectionForeground
-                    shapes={selectedShapes}
+                    shapes={selectedShapes.filter(shape => !shape.props.isLocked)}
                     bounds={selectionBounds}
                     showResizeHandles={showResizeHandles}
                     showRotateHandles={showRotateHandles}
+                    showCloneHandles={showCloneHandles}
                   />
                 </Container>
               )}
               {showHandles && onlySelectedShapeWithHandles && components.Handle && (
                 <Container
                   data-type="onlySelectedShapeWithHandles"
+                  data-html2canvas-ignore="true"
                   bounds={selectionBounds}
                   zIndex={10003}
                 >
@@ -217,6 +229,7 @@ export const Canvas = observer(function Renderer<S extends TLReactShape>({
               {selectedShapes && components.SelectionDetail && (
                 <SelectionDetailContainer
                   key={'detail' + selectedShapes.map(shape => shape.id).join('')}
+                  data-html2canvas-ignore="true"
                   shapes={selectedShapes}
                   bounds={selectionBounds}
                   detail={showSelectionRotation ? 'rotation' : 'size'}
@@ -235,7 +248,7 @@ export const Canvas = observer(function Renderer<S extends TLReactShape>({
           />
         )}
 
-        <div id="tl-dev-tools-canvas-anchor" />
+        <div id="tl-dev-tools-canvas-anchor" data-html2canvas-ignore="true" />
       </div>
       <HTMLLayer>
         {selectedShapes && selectionBounds && (
@@ -243,7 +256,7 @@ export const Canvas = observer(function Renderer<S extends TLReactShape>({
             {selectedShapes && components.ContextBar && (
               <ContextBarContainer
                 key={'context' + selectedShapes.map(shape => shape.id).join('')}
-                shapes={selectedShapes}
+                shapes={selectedShapes.filter(s => !s.props.isLocked)}
                 hidden={!showContextBar}
                 bounds={singleSelectedShape ? singleSelectedShape.bounds : selectionBounds}
                 rotation={singleSelectedShape ? singleSelectedShape.props.rotation : 0}

@@ -1,10 +1,10 @@
-{:paths ["src/main" "src/electron" "templates"]
+{:paths ["src/main" "src/electron" "src/resources"]
  :deps
  {org.clojure/clojure                   {:mvn/version "1.11.1"}
   rum/rum                               {:mvn/version "0.12.9"}
-  datascript/datascript                 {:mvn/version "1.3.8"}
+  datascript/datascript                 {:mvn/version "1.5.3"}
   datascript-transit/datascript-transit {:mvn/version "0.3.0"}
-  borkdude/rewrite-edn                  {:mvn/version "0.4.6"}
+  borkdude/rewrite-edn                  {:mvn/version "0.4.7"}
   funcool/promesa                       {:mvn/version "4.0.2"}
   medley/medley                         {:mvn/version "1.4.0"}
   metosin/reitit-frontend               {:mvn/version "0.3.10"}
@@ -27,7 +27,11 @@
   camel-snake-kebab/camel-snake-kebab   {:mvn/version "0.4.2"}
   instaparse/instaparse                 {:mvn/version "1.4.10"}
   org.clojars.mmb90/cljs-cache          {:mvn/version "0.1.4"}
+  fipp/fipp                             {:mvn/version "0.6.26"}
+  logseq/common                         {:local/root "deps/common"}
   logseq/graph-parser                   {:local/root "deps/graph-parser"}
+  logseq/publishing                     {:local/root "deps/publishing"}
+  logseq/shui                           {:local/root "deps/shui"}
   metosin/malli                         {:mvn/version "0.10.0"}}
 
  :aliases {:cljs {:extra-paths ["src/dev-cljs/" "src/test/" "src/electron/"]
@@ -50,5 +54,5 @@
                    :main-opts ["-m" "cljs-test-runner.main" "-d" "src/bench" "-n" "frontend.benchmark-test-runner"]}
 
            ;; Use :replace-deps for tools. See https://github.com/clj-kondo/clj-kondo/issues/1536#issuecomment-1013006889
-           :clj-kondo {:replace-deps {clj-kondo/clj-kondo {:mvn/version "2022.12.08"}}
+           :clj-kondo {:replace-deps {clj-kondo/clj-kondo {:mvn/version "2023.05.26"}}
                        :main-opts  ["-m" "clj-kondo.main"]}}}

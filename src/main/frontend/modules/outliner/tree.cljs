@@ -88,13 +88,16 @@
 
 (defn block-entity->map
   [e]
-  {:db/id (:db/id e)
-   :block/uuid (:block/uuid e)
-   :block/parent {:db/id (:db/id (:block/parent e))}
-   :block/left {:db/id (:db/id (:block/left e))}
-   :block/page (:block/page e)
-   :block/refs (:block/refs e)
-   :block/children (:block/children e)})
+  (cond-> {:db/id (:db/id e)
+           :block/uuid (:block/uuid e)
+           :block/parent {:db/id (:db/id (:block/parent e))}
+           :block/page (:block/page e)}
+    (:db/id (:block/left e))
+    (assoc :block/left {:db/id (:db/id (:block/left e))})
+    (:block/refs e)
+    (assoc :block/refs (:block/refs e))
+    (:block/children e)
+    (assoc :block/children (:block/children e))))
 
 (defn filter-top-level-blocks
   [blocks]
@@ -134,5 +137,7 @@
   [repo db-id]
   (when-let [root-block (db/pull db-id)]
     (let [blocks (db/get-block-and-children repo (:block/uuid root-block))
+          ; the root-block returned by db/pull misses :block/_refs therefore we use the one from db/get-block-and-children
+          root-block (first (filter (fn [b] (= (:db/id b) db-id)) blocks))
           blocks-exclude-root (remove (fn [b] (= (:db/id b) db-id)) blocks)]
       (sort-blocks blocks-exclude-root root-block))))

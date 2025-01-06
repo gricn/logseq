@@ -65,16 +65,16 @@
                       (if (<= 0 (.indexOf ostr oquery)) MAX-STRING-LENGTH 0))
         (empty? s) 0
         :else (if (= (first q) (first s))
-                   (recur (rest q)
-                          (rest s)
-                          (inc mult) ;; increase the multiplier as more query chars are matched
-                          (dec idx) ;; decrease idx so score gets lowered the further into the string we match
-                          (+ mult score)) ;; score for this match is current multiplier * idx
-                   (recur q
-                          (rest s)
-                          1 ;; when there is no match, reset multiplier to one
-                          (dec idx)
-                          score))))))
+                  (recur (rest q)
+                         (rest s)
+                         (inc mult) ;; increase the multiplier as more query chars are matched
+                         (dec idx) ;; decrease idx so score gets lowered the further into the string we match
+                         (+ mult score)) ;; score for this match is current multiplier * idx
+                  (recur q
+                         (rest s)
+                         1 ;; when there is no match, reset multiplier to one
+                         (dec idx)
+                         score))))))
 
 (defn fuzzy-search
   [data query & {:keys [limit extract-fn]
@@ -135,7 +135,7 @@
 (defn page-search
   "Return a list of page names that match the query"
   ([q]
-   (page-search q 10))
+   (page-search q 100))
   ([q limit]
    (when-let [repo (state/get-current-repo)]
      (let [q (util/search-normalize q (state/enable-search-remove-accents?))
@@ -145,11 +145,11 @@
                           (search-db/make-pages-title-indice!))
                result (->> (.search indice q (clj->js {:limit limit}))
                            (bean/->clj))]
-           ;; TODO: add indexes for highlights
-           (->> (map
-                  (fn [{:keys [item]}]
-                    (:original-name item))
-                 result)
+           (->> result
+                (util/distinct-by (fn [i] (string/trim (get-in i [:item :name]))))
+                (map
+                 (fn [{:keys [item]}]
+                   (:original-name item)))
                 (remove nil?)
                 (map string/trim)
                 (distinct)
@@ -181,16 +181,20 @@
          (let [result (fuzzy-search (keys templates) q :limit limit)]
            (vec (select-keys templates result))))))))
 
+(defn get-all-properties
+  []
+  (->> (db-model/get-all-properties)
+       (remove (property/hidden-properties))
+       ;; Complete full keyword except the ':'
+       (map #(subs (str %) 1))))
+
 (defn property-search
   ([q]
    (property-search q 100))
   ([q limit]
    (when q
      (let [q (clean-str q)
-           properties (->> (db-model/get-all-properties)
-                           (remove (property/hidden-properties))
-                           ;; Complete full keyword except the ':'
-                           (map #(subs (str %) 1)))]
+           properties (get-all-properties)]
        (when (seq properties)
          (if (string/blank? q)
            properties
@@ -223,7 +227,8 @@
                           (remove string/blank?)
                           (map search-db/original-page-name->index))
         pages-to-remove-set (->> (remove :added pages)
-                                 (map :v))
+                                 (map :v)
+                                 set)
         pages-to-remove-id-set (->> (remove :added pages)
                                     (map :e)
                                     set)]
@@ -256,12 +261,15 @@
   (let [data (:tx-data tx-report)
         datoms (filter
                 (fn [datom]
-                  (contains? #{:block/name :block/content} (:a datom)))
+                  ;; Capture any direct change on page display title, page ref or block content
+                  (contains? #{:block/name :block/original-name :block/content} (:a datom)))
                 data)]
     (when (seq datoms)
       (let [datoms (group-by :a datoms)
             blocks (:block/content datoms)
-            pages (:block/name datoms)]
+            pages (concat ;; Duplicated eids are handled in `get-pages-from-datoms-impl`
+                   (:block/name datoms)
+                   (:block/original-name datoms))]
         (merge (get-blocks-from-datoms-impl blocks)
                (get-pages-from-datoms-impl pages))))))
 

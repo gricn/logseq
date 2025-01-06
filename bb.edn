@@ -1,17 +1,17 @@
-{:paths ["scripts/src" "src/main"]
+{:paths ["scripts/src" "src/main" "src/resources"]
  :deps
  {metosin/malli
   {:mvn/version "0.10.0"}
   logseq/bb-tasks
   #_{:local/root "../bb-tasks"}
   {:git/url "https://github.com/logseq/bb-tasks"
-   :git/sha "4295d5df0458cc06a09c5d506510ee49b785407d"}
+   :git/sha "70d3edeb287f5cec7192e642549a401f7d6d4263"}
   logseq/graph-parser
   {:local/root "deps/graph-parser"}
   org.clj-commons/digest
   {:mvn/version "1.4.100"}}
  :pods
- {clj-kondo/clj-kondo {:version "2022.10.05"}
+ {clj-kondo/clj-kondo {:version "2023.05.26"}
   org.babashka/fswatcher {:version "0.0.3"}}
  :tasks
  {dev:desktop-watch
@@ -30,6 +30,33 @@
 
   dev:app-watch
   logseq.tasks.dev.mobile/app-watch
+
+  -dev:build-publishing-frontend
+  logseq.tasks.dev/build-publishing-frontend
+
+  dev:publishing-backend
+  logseq.tasks.dev/publishing-backend
+
+  -dev:publishing-release
+  {:depends [-dev:build-publishing-frontend]
+   :doc "Build release publishing spa app given graph and output dirs"
+   :task (run 'dev:publishing-backend)}
+
+  -dev:watch-publishing-frontend
+  logseq.tasks.dev/watch-publishing-frontend
+
+  -dev:watch-publishing-backend
+  logseq.tasks.dev/watch-publishing-backend
+
+  -dev:publishing-dev
+  {:depends [-dev:watch-publishing-frontend -dev:watch-publishing-backend]
+   :doc "Watch dev publishing spa app given graph and output dirs"}
+
+  dev:publishing
+  {:doc "Builds full publishing app given graph and output dirs. Append --dev to watch frontend"
+   :task (if ((set *command-line-args*) "--dev")
+           (run '-dev:publishing-dev {:parallel true})
+           (run '-dev:publishing-release))}
 
   dev:npx-cap-run-ios
   logseq.tasks.dev.mobile/npx-cap-run-ios
@@ -69,6 +96,9 @@
   dev:validate-global-config-edn
   logseq.tasks.malli/validate-global-config-edn
 
+  dev:validate-ast
+  logseq.tasks.malli/validate-ast
+
   dev:lint
   logseq.tasks.dev/lint
 
@@ -96,11 +126,8 @@
   lang:missing
   logseq.tasks.lang/list-missing
 
-  lang:duplicates
-  logseq.tasks.lang/list-duplicates
-
-  lang:invalid-translations
-  logseq.tasks.lang/invalid-translations
+  lang:validate-translations
+  logseq.tasks.lang/validate-translations
 
   file-sync:integration-tests
   logseq.tasks.file-sync/integration-tests}
@@ -118,4 +145,4 @@
   {:paths ["src/main"]
    ;; Ignore namespaces that won't be helpful to document initially
    ;; e.g. frontend.components.onboarding -> "Onboarding fns"
-   :ignore-regex "^(frontend.components|frontend.extensions|frontend.modules|frontend.mobile)"}}}
+   :ignore-regex "^(frontend.components|frontend.extensions|frontend.modules|frontend.mobile|logseq.sdk)"}}}

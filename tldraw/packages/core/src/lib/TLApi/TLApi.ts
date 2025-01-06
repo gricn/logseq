@@ -1,5 +1,6 @@
 import Vec from '@tldraw/vec'
 import type { TLAsset, TLBinding, TLEventMap } from '../../types'
+import { TLCloneDirection, Geometry } from '../../types'
 import { BoundsUtils, isNonNullable, uniqueId } from '../../utils'
 import type { TLShape, TLShapeModel } from '../shapes'
 import type { TLApp } from '../TLApp'
@@ -11,8 +12,10 @@ export class TLApi<S extends TLShape = TLShape, K extends TLEventMap = TLEventMa
     this.app = app
   }
 
-  editShape = (shape: string | S | undefined): this => {
-    this.app.transition('select').selectedTool.transition('editingShape', { shape })
+  editShape = (shape: S | undefined): this => {
+    if (!shape?.props.isLocked)
+      this.app.transition('select').selectedTool.transition('editingShape', { shape })
+
     return this
   }
 
@@ -41,7 +44,9 @@ export class TLApi<S extends TLShape = TLShape, K extends TLEventMap = TLEventMa
    *
    * @param shapes The serialized shape changes to apply.
    */
-  updateShapes = <T extends S>(...shapes: ({ id: string } & Partial<T['props']>)[]): this => {
+  updateShapes = <T extends S>(
+    ...shapes: ({ id: string; type: string } & Partial<T['props']>)[]
+  ): this => {
     this.app.updateShapes(shapes)
     return this
   }
@@ -168,26 +173,42 @@ export class TLApi<S extends TLShape = TLShape, K extends TLEventMap = TLEventMa
     return this
   }
 
+  toggleSnapToGrid = (): this => {
+    const { settings } = this.app
+    settings.update({ snapToGrid: !settings.snapToGrid })
+    return this
+  }
+
+
+  togglePenMode = (): this => {
+    const { settings } = this.app
+    settings.update({ penMode: !settings.penMode })
+    return this
+  }
+
   setColor = (color: string): this => {
     const { settings } = this.app
 
     settings.update({ color: color })
 
     this.app.selectedShapesArray.forEach(s => {
-      s.update({ fill: color, stroke: color })
+      if (!s.props.isLocked) s.update({ fill: color, stroke: color })
     })
     this.app.persist()
 
     return this
   }
 
-  save = () => {
-    this.app.save()
-    return this
-  }
+  setScaleLevel = (scaleLevel: string): this => {
+    const { settings } = this.app
 
-  saveAs = () => {
-    this.app.save()
+    settings.update({ scaleLevel })
+
+    this.app.selectedShapes.forEach(shape => {
+      if (!shape.props.isLocked) shape.setScaleLevel(scaleLevel)
+    })
+    this.app.persist()
+
     return this
   }
 
@@ -201,10 +222,65 @@ export class TLApi<S extends TLShape = TLShape, K extends TLEventMap = TLEventMa
     return this
   }
 
+  persist = () => {
+    this.app.persist()
+    return this
+  }
+
   createNewLineBinding = (source: S | string, target: S | string) => {
     return this.app.createNewLineBinding(source, target)
   }
 
+  clone = (direction: TLCloneDirection) => {
+    if (
+      this.app.readOnly ||
+      this.app.selectedShapesArray.length !== 1 ||
+      !Object.values(Geometry).some((geometry: string) => geometry === this.app.selectedShapesArray[0].type)
+    ) return;
+
+    const shape = this.app.allSelectedShapesArray[0]
+    const ShapeClass = this.app.getShapeClass(shape.type)
+
+    const {minX, minY, maxX, maxY, width, height} = shape.bounds
+    const spacing = 100
+    let point = [0, 0]
+
+    switch(direction) {
+      case TLCloneDirection.Down: {
+        point = [minX, maxY + spacing]
+        break
+      }
+      case TLCloneDirection.Up: {
+        point = [minX, minY - spacing  - height]
+        break
+      }
+      case TLCloneDirection.Left: {
+        point = [minX - spacing - width, minY]
+        break
+      }
+      case TLCloneDirection.Right: {
+        point = [maxX + spacing, minY]
+        break
+      }
+    }
+
+    const clone = new ShapeClass({
+      ...shape.serialized,
+      id: uniqueId(),
+      nonce: Date.now(),
+      refs: [],
+      label: '',
+      point: point,
+    })
+
+    this.app.history.pause()
+    this.app.currentPage.addShapes(clone)
+    this.app.createNewLineBinding(shape, clone)
+    this.app.history.resume()
+    this.app.persist();
+    setTimeout(() => this.editShape(clone)) 
+  }
+  
   /** Clone shapes with given context */
   cloneShapes = ({
     shapes,
@@ -362,6 +438,8 @@ export class TLApi<S extends TLShape = TLShape, K extends TLEventMap = TLEventMa
   }
 
   doGroup = (shapes: S[] = this.app.allSelectedShapesArray) => {
+    if (this.app.readOnly) return
+
     const selectedGroups: S[] = [
       ...shapes.filter(s => s.type === 'group'),
       ...shapes.map(s => this.app.getParentGroup(s)),
@@ -388,6 +466,8 @@ export class TLApi<S extends TLShape = TLShape, K extends TLEventMap = TLEventMa
   }
 
   unGroup = (shapes: S[] = this.app.allSelectedShapesArray) => {
+    if (this.app.readOnly) return
+
     const selectedGroups: S[] = [
       ...shapes.filter(s => s.type === 'group'),
       ...shapes.map(s => this.app.getParentGroup(s)),
@@ -402,5 +482,28 @@ export class TLApi<S extends TLShape = TLShape, K extends TLEventMap = TLEventMa
 
       this.app.setSelectedShapes(shapesInGroups)
     }
+  }
+
+  convertShapes = (type: string, shapes: S[] = this.app.allSelectedShapesArray) => {
+    const ShapeClass = this.app.getShapeClass(type)
+
+    this.app.currentPage.removeShapes(...shapes)
+    const clones = shapes.map(s => {
+      return new ShapeClass({
+        ...s.serialized,
+        type: type,
+        nonce: Date.now(),
+      })
+    })
+    this.app.currentPage.addShapes(...clones)
+    this.app.persist()
+    this.app.setSelectedShapes(clones)
+  }
+
+  setCollapsed = (collapsed: boolean, shapes: S[] = this.app.allSelectedShapesArray) => {
+    shapes.forEach(shape => {
+      if (shape.props.type === 'logseq-portal') shape.setCollapsed(collapsed)
+    })
+    this.app.persist()
   }
 }

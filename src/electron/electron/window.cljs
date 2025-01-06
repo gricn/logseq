@@ -5,7 +5,7 @@
             [electron.context-menu :as context-menu]
             [electron.logger :as logger]
             ["electron" :refer [BrowserWindow app session shell] :as electron]
-            ["path" :as path]
+            ["path" :as node-path]
             ["url" :as URL]
             [electron.state :as state]
             [cljs-bean.core :as bean]
@@ -15,9 +15,9 @@
 (defonce *quitting? (atom false))
 
 (def MAIN_WINDOW_ENTRY (if dev?
-                         ;;"http://localhost:3001"
-                         (str "file://" (path/join js/__dirname "index.html"))
-                         (str "file://" (path/join js/__dirname "electron.html"))))
+                         ;"http://localhost:3001"
+                         (str "file://" (node-path/join js/__dirname "index.html"))
+                         (str "file://" (node-path/join js/__dirname "electron.html"))))
 
 (defn create-main-window!
   ([]
@@ -26,13 +26,16 @@
    (create-main-window! url nil))
   ([url opts]
    (let [win-state (windowStateKeeper (clj->js {:defaultWidth 980 :defaultHeight 700}))
+         native-titlebar? (cfgs/get-item :window/native-titlebar?)
          win-opts  (cond->
-                     {:width                (.-width win-state)
+                     {:backgroundColor      "#fff" ; SEE https://www.electronjs.org/docs/latest/faq#the-font-looks-blurry-what-is-this-and-what-can-i-do
+                      :width                (.-width win-state)
                       :height               (.-height win-state)
-                      :frame                true
+                      :frame                (or mac? native-titlebar?)
                       :titleBarStyle        "hiddenInset"
                       :trafficLightPosition {:x 16 :y 16}
                       :autoHideMenuBar      (not mac?)
+                      :show                 false
                       :webPreferences
                       {:plugins                 true        ; pdf
                        :nodeIntegration         false
@@ -45,15 +48,14 @@
                        ;; Remove OverlayScrollbars and transition `.scrollbar-spacing`
                        ;; to use `scollbar-gutter` after the feature is implemented in browsers.
                        :enableBlinkFeatures     'OverlayScrollbars'
-                       :preload                 (path/join js/__dirname "js/preload.js")}}
+                       :preload                 (node-path/join js/__dirname "js/preload.js")}}
 
                      (seq opts)
                      (merge opts)
 
                      linux?
-                     (assoc :icon (path/join js/__dirname "icons/logseq.png")))
+                     (assoc :icon (node-path/join js/__dirname "icons/logseq.png")))
          win       (BrowserWindow. (clj->js win-opts))]
-     (.manage win-state win)
      (.onBeforeSendHeaders (.. session -defaultSession -webRequest)
                            (clj->js {:urls (array "*://*.youtube.com/*")})
                            (fn [^js details callback]
@@ -74,35 +76,46 @@
      ;;(when dev? (.. win -webContents (openDevTools)))
      win)))
 
+(defn get-all-windows
+  []
+  (.getAllWindows BrowserWindow))
+
 (defn destroy-window!
   [^js win]
   (.destroy win))
 
+(defn close-handler
+  [^js win close-watcher-f e]
+  (.preventDefault e)
+  (when-let [dir (state/get-window-graph-path win)]
+    (close-watcher-f win dir))
+  (state/close-window! win)
+  (let [web-contents (. win -webContents)]
+    (.send web-contents "persist-zoom-level" (.getZoomLevel web-contents))
+    (.send web-contents "persistent-dbs"))
+  (async/go
+    (let [_ (async/<! state/persistent-dbs-chan)]
+      (destroy-window! win)
+      ;; (if @*quitting?
+      ;;   (doseq [win (get-all-windows)]
+      ;;     (destroy-window! win))
+      ;;   (destroy-window! win))
+      (when @*quitting?
+        (async/put! state/persistent-dbs-chan true)))))
+
 (defn on-close-actions!
   ;; TODO merge with the on close in core
   [^js win close-watcher-f] ;; injected watcher related func
-  (.on win "close" (fn [e]
-                     (.preventDefault e)
-                     (when-let [dir (state/get-window-graph-path win)]
-                       (close-watcher-f win dir))
-                     (state/close-window! win)
-                     (let [web-contents (. win -webContents)]
-                       (.send web-contents "persistent-dbs"))
-                     (async/go
-                       (let [_ (async/<! state/persistent-dbs-chan)]
-                         (destroy-window! win)
-                         (when @*quitting?
-                           (async/put! state/persistent-dbs-chan true)))))))
+  (.on win "close" (fn [e] (close-handler win close-watcher-f e))))
 
 (defn switch-to-window!
   [^js win]
   (when (.isMinimized ^object win)
     (.restore win))
-  (.focus win))
-
-(defn get-all-windows
-  []
-  (.getAllWindows BrowserWindow))
+  ;; Ref: https://github.com/electron/electron/issues/8734
+  (.setVisibleOnAllWorkspaces win true)
+  (.focus win)
+  (.setVisibleOnAllWorkspaces win false))
 
 (defn get-graph-all-windows
   [graph-path] ;; graph-path == dir
@@ -136,8 +149,8 @@
                   url (if-not win32? (string/replace url "file://" "") url)]
               (logger/info "new-window" url)
               (if (some #(string/includes?
-                          (.normalize path url)
-                          (.join path (. app getAppPath) %))
+                          (.normalize node-path url)
+                          (.join node-path (. app getAppPath) %))
                         ["index.html" "electron.html"])
                 (logger/info "pass-window" url)
                 (open-default-app! url open))))
@@ -173,7 +186,7 @@
                              {:plugins          true
                               :nodeIntegration  false
                               :webSecurity      (not dev?)
-                              :preload          (path/join js/__dirname "js/preload.js")
+                              :preload          (node-path/join js/__dirname "js/preload.js")
                               :nativeWindowOpen true}}}
                            features)
                     (do (open-external! url) {:action "deny"}))
@@ -187,7 +200,9 @@
 
       (doto win
         (.on "enter-full-screen" #(.send web-contents "full-screen" "enter"))
-        (.on "leave-full-screen" #(.send web-contents "full-screen" "leave")))
+        (.on "leave-full-screen" #(.send web-contents "full-screen" "leave"))
+        (.on "maximize" #(.send web-contents "maximize" true))
+        (.on "unmaximize" #(.send web-contents "maximize" false)))
 
       ;; clear
       (fn []

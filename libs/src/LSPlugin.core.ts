@@ -19,9 +19,11 @@ import {
   cleanInjectedScripts,
   safeSnakeCase,
   injectTheme,
-  cleanInjectedUI, PluginLogger,
+  cleanInjectedUI,
+  PluginLogger,
 } from './helpers'
 import * as pluginHelpers from './helpers'
+import DOMPurify from 'dompurify'
 import Debug from 'debug'
 import {
   LSPluginCaller,
@@ -52,6 +54,7 @@ const DIR_PLUGINS = 'plugins'
 declare global {
   interface Window {
     LSPluginCore: LSPluginCore
+    DOMPurify: typeof DOMPurify
   }
 }
 
@@ -89,7 +92,7 @@ class PluginSettings extends EventEmitter<'change' | 'reset'> {
       if (this._settings[k] == v) return
       this._settings[k] = v
     } else if (isObject(k)) {
-      deepMerge(this._settings, k)
+      this._settings = deepMerge(this._settings, k)
     } else {
       return
     }
@@ -231,7 +234,7 @@ function initMainUIHandlers(pluginLocal: PluginLocal) {
   pluginLocal.on(_('attrs'), (attrs: Partial<UIContainerAttrs>) => {
     const el = pluginLocal.getMainUIContainer()
     Object.entries(attrs).forEach(([k, v]) => {
-      el?.setAttribute(k, v)
+      el?.setAttribute(k, String(v))
       if (k === 'draggable' && v) {
         pluginLocal._dispose(
           pluginLocal._setupDraggableContainer(el, {
@@ -306,23 +309,25 @@ function initProviderHandlers(pluginLocal: PluginLocal) {
   // provider:ui
   pluginLocal.on(_('ui'), (ui: UIOptions) => {
     pluginLocal._onHostMounted(() => {
-      pluginLocal._dispose(
-        setupInjectedUI.call(
-          pluginLocal,
-          ui,
-          Object.assign(
-            {
-              'data-ref': pluginLocal.id,
-            },
-            ui.attrs || {}
-          ),
-          ({ el, float }) => {
-            if (!float) return
-            const identity = el.dataset.identity
-            pluginLocal.layoutCore.move_container_to_top(identity)
-          }
-        )
+      const ret = setupInjectedUI.call(
+        pluginLocal,
+        ui,
+        Object.assign(
+          {
+            'data-ref': pluginLocal.id,
+          },
+          ui.attrs || {}
+        ),
+        ({ el, float }) => {
+          if (!float) return
+          const identity = el.dataset.identity
+          pluginLocal.layoutCore.move_container_to_top(identity)
+        }
       )
+
+      if (typeof ret === 'function') {
+        pluginLocal._dispose(ret)
+      }
     })
   })
 }
@@ -344,14 +349,14 @@ function initApiProxyHandlers(pluginLocal: PluginLocal) {
       }
     }
 
-    const { _sync } = payload
-
     if (pluginLocal.shadow) {
       if (payload.actor) {
         payload.actor.resolve(ret)
       }
       return
     }
+
+    const { _sync } = payload
 
     if (_sync != null) {
       const reply = (result: any) => {
@@ -379,25 +384,23 @@ function convertToLSPResource(fullUrl: string, dotPluginRoot: string) {
 class IllegalPluginPackageError extends Error {
   constructor(message: string) {
     super(message)
-    this.name = IllegalPluginPackageError.name
+    this.name = 'IllegalPluginPackageError'
   }
 }
 
 class ExistedImportedPluginPackageError extends Error {
   constructor(message: string) {
     super(message)
-    this.name = ExistedImportedPluginPackageError.name
+    this.name = 'ExistedImportedPluginPackageError'
   }
 }
 
 /**
  * Host plugin for local
  */
-class PluginLocal extends EventEmitter<'loaded'
-  | 'unloaded'
-  | 'beforeunload'
-  | 'error'
-  | string> {
+class PluginLocal extends EventEmitter<
+  'loaded' | 'unloaded' | 'beforeunload' | 'error' | string
+> {
   private _sdk: Partial<PluginLocalSDKMetadata> = {}
   private _disposes: Array<() => Promise<any>> = []
   private _id: PluginLocalIdentity
@@ -406,7 +409,7 @@ class PluginLocal extends EventEmitter<'loaded'
   private _localRoot?: string
   private _dotSettingsFile?: string
   private _caller?: LSPluginCaller
-  private _logger?: PluginLogger
+  private _logger?: PluginLogger = new PluginLogger('PluginLocal')
 
   /**
    * @param _options
@@ -430,7 +433,7 @@ class PluginLocal extends EventEmitter<'loaded'
 
   async _setupUserSettings(reload?: boolean) {
     const { _options } = this
-    const logger = (this._logger = new PluginLogger('Loader'))
+    const logger = (this._logger = new PluginLogger(`Loader:${this.debugTag}`))
 
     if (_options.settings && !reload) {
       return
@@ -592,7 +595,7 @@ class PluginLocal extends EventEmitter<'loaded'
     // Validate id
     const { registeredPlugins, isRegistering } = this._ctx
     if (isRegistering && registeredPlugins.has(this.id)) {
-      throw new ExistedImportedPluginPackageError('Registered plugin package Error')
+      throw new ExistedImportedPluginPackageError(this.id)
     }
 
     return async () => {
@@ -864,7 +867,7 @@ class PluginLocal extends EventEmitter<'loaded'
 
       this._dispose(cleanInjectedScripts.bind(this))
     } catch (e) {
-      this.logger?.error('[Load Plugin]', e, true)
+      this.logger.error('load', e, true)
 
       this.dispose().catch(null)
       this._status = PluginLocalLoadStatus.ERROR
@@ -910,27 +913,27 @@ class PluginLocal extends EventEmitter<'loaded'
     }
 
     try {
-      this._status = PluginLocalLoadStatus.UNLOADING
-
       const eventBeforeUnload = { unregister }
 
-      // sync call
-      try {
-        await this._caller?.callUserModel(
-          AWAIT_LSPMSGFn(LSPMSG_BEFORE_UNLOAD),
-          eventBeforeUnload
-        )
-        this.emit('beforeunload', eventBeforeUnload)
-      } catch (e) {
-        console.error('[beforeunload Error]', e)
-      }
+      if (this.loaded) {
+        this._status = PluginLocalLoadStatus.UNLOADING
 
-      await this.dispose()
+        try {
+          await this._caller?.callUserModel(
+            AWAIT_LSPMSGFn(LSPMSG_BEFORE_UNLOAD),
+            eventBeforeUnload
+          )
+          this.emit('beforeunload', eventBeforeUnload)
+        } catch (e) {
+          this.logger.error('beforeunload', e)
+        }
+
+        await this.dispose()
+      }
 
       this.emit('unloaded')
     } catch (e) {
-      debug('[plugin unload Error]', e)
-      return false
+      this.logger.error('unload', e)
     } finally {
       this._status = PluginLocalLoadStatus.UNLOADED
     }
@@ -1036,7 +1039,7 @@ class PluginLocal extends EventEmitter<'loaded'
 
   get debugTag() {
     const name = this._options?.name
-    return `#${this._id} ${name ?? ''}`
+    return `#${this._id} - ${name ?? ''}`
   }
 
   get localRoot(): string {
@@ -1084,7 +1087,8 @@ class PluginLocal extends EventEmitter<'loaded'
  * Host plugin core
  */
 class LSPluginCore
-  extends EventEmitter<'beforeenable'
+  extends EventEmitter<
+    | 'beforeenable'
     | 'enabled'
     | 'beforedisable'
     | 'disabled'
@@ -1098,7 +1102,8 @@ class LSPluginCore
     | 'settings-changed'
     | 'unlink-plugin'
     | 'beforereload'
-    | 'reloaded'>
+    | 'reloaded'
+  >
   implements ILSPluginThemeManager {
   private _isRegistering = false
   private _readyIndicator?: DeferredActor
@@ -1113,8 +1118,10 @@ class LSPluginCore
     externals: [],
   }
   private readonly _registeredThemes = new Map<PluginLocalIdentity, Theme[]>()
-  private readonly _registeredPlugins = new Map<PluginLocalIdentity,
-    PluginLocal>()
+  private readonly _registeredPlugins = new Map<
+    PluginLocalIdentity,
+    PluginLocal
+  >()
   private _currentTheme: {
     pid: PluginLocalIdentity
     opt: Theme | LegacyTheme
@@ -1190,14 +1197,18 @@ class LSPluginCore
       return
     }
 
-    const perfTable = new Map<string,
-      { o: PluginLocal; s: number; e: number }>()
+    const perfTable = new Map<
+      string,
+      { o: PluginLocal; s: number; e: number }
+    >()
     const debugPerfInfo = () => {
       const data: any = Array.from(perfTable.values()).reduce((ac, it) => {
         const { id, options, status, disabled } = it.o
 
-        if (disabled !== true &&
-          (options.entry || (!options.name && !options.entry))) {
+        if (
+          disabled !== true &&
+          (options.entry || (!options.name && !options.entry))
+        ) {
           ac[id] = {
             name: options.name,
             entry: options.entry,
@@ -1230,17 +1241,19 @@ class LSPluginCore
       // valid externals
       if (externals?.size) {
         try {
-          const validatedExternals: Record<string, boolean> = await invokeHostExportedApi(
-            'validate_external_plugins', [...externals]
-          )
+          const validatedExternals: Record<string, boolean> =
+            await invokeHostExportedApi('validate_external_plugins', [
+              ...externals,
+            ])
 
-          externals = new Set([...Object.entries(validatedExternals)].reduce(
-            (a, [k, v]) => {
+          externals = new Set(
+            [...Object.entries(validatedExternals)].reduce((a, [k, v]) => {
               if (v) {
                 a.push(k)
               }
               return a
-            }, []))
+            }, [])
+          )
         } catch (e) {
           console.error('[validatedExternals Error]', e)
         }
@@ -1603,6 +1616,7 @@ function setupPluginCore(options: any) {
   debug('=== 🔗 Setup Logseq Plugin System 🔗 ===')
 
   window.LSPluginCore = pluginCore
+  window.DOMPurify = DOMPurify
 }
 
 export { PluginLocal, pluginHelpers, setupPluginCore }

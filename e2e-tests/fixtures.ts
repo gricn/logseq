@@ -1,5 +1,5 @@
-import * as fs from 'fs'
-import * as path from 'path'
+import fs from 'fs'
+import path from 'path'
 import { test as base, expect, ConsoleMessage, Locator } from '@playwright/test';
 import { ElectronApplication, Page, BrowserContext, _electron as electron } from 'playwright'
 import { loadLocalGraph, openLeftSidebar, randomString } from './utils';
@@ -9,42 +9,37 @@ let electronApp: ElectronApplication
 let context: BrowserContext
 let page: Page
 
-let repoName = randomString(10)
+// For testing special characters in graph name / path
+let repoName = "@" + randomString(10)
 let testTmpDir = path.resolve(__dirname, '../tmp')
 
 if (fs.existsSync(testTmpDir)) {
   fs.rmSync(testTmpDir, { recursive: true })
 }
 
-export let graphDir = path.resolve(testTmpDir, "e2e-test", repoName)
+export let graphDir = path.resolve(testTmpDir, "#e2e-test", repoName)
 
 // NOTE: This following is a console log watcher for error logs.
 // Save and print all logs when error happens.
-let logs: string
+let logs: string = '';
 const consoleLogWatcher = (msg: ConsoleMessage) => {
-  // console.log(msg.text())
-  const text = msg.text()
-  logs += text + '\n'
+  const text = msg.text();
 
-  // expect() will remember all arguments in memory,
-  // and the memory usage will grow *exponentially* in the number of output line.
-  // So we call expect() iff interesting pattern has already be found to avoid OOM.
-  const expectNotMatchWithCheck = (pattern: RegExp) => {
-    if (text.match(pattern)) {
-      expect(text, logs).not.toMatch(pattern)
-    }
+  // List of error messages to ignore
+  const ignoreErrors = [
+    /net/,
+    /^Error with Permissions-Policy header:/
+  ];
+
+  // If the text matches any of the ignoreErrors, return early
+  if (ignoreErrors.some(error => text.match(error))) {
+    console.log(`WARN:: ${text}\n`)
+    return;
   }
 
-  expectNotMatchWithCheck(/^(Failed to|Uncaught)/)
-
-  // youtube video
-  // Error with Permissions-Policy header: Origin trial controlled feature not enabled: 'ch-ua-reduced'.
-  if (!text.match(/^Error with Permissions-Policy header:/)) {
-    expectNotMatchWithCheck(/^Error/)
-  }
-
-  // NOTE: React warnings will be logged as error.
-  // expect(msg.type()).not.toBe('error')
+  logs += text + '\n';
+  expect(text, logs).not.toMatch(/^(Failed to|Uncaught|Assert failed)/);
+  expect(text, logs).not.toMatch(/^Error/);
 }
 
 base.beforeAll(async () => {
@@ -129,13 +124,11 @@ base.beforeEach(async () => {
     await page.keyboard.press('Escape')
     await page.keyboard.press('Escape')
 
-    /*
-    const locator = page.locator('.notification-close-button').first()
-    while (await locator.isVisible()) {
-      locator.click() // ignore error
-    }
-    */
     await expect(page.locator('.notification-close-button')).not.toBeVisible()
+
+    if (await page.locator('.notification-clear button').isVisible()) {
+      await page.locator('.notification-clear button').click()
+    }
 
     const rightSidebar = page.locator('.cp__right-sidebar-inner')
     if (await rightSidebar.isVisible()) {
@@ -219,7 +212,7 @@ export const test = base.extend<LogseqFixtures>({
       },
       activeEditing: async (nth: number): Promise<void> => {
         await page.waitForSelector(`.ls-block >> nth=${nth}`, { timeout: 1000 })
-        // scroll, for isVisble test
+        // scroll, for isVisible test
         await page.$eval(`.ls-block >> nth=${nth}`, (element) => {
           element.scrollIntoView();
         });
@@ -305,7 +298,7 @@ export let traceAll = function(){
   test.beforeAll(async () => {
     await context.tracing.startChunk();
   })
-  
+
   test.afterAll(async () => {
     await context.tracing.stopChunk({ path: getTracingFilePath() });
   })

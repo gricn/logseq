@@ -1,12 +1,12 @@
 (ns frontend.extensions.pdf.assets
   (:require [cljs.reader :as reader]
             [clojure.string :as string]
-            [cljs.pprint :as pprint]
             [frontend.config :as config]
             [frontend.db.model :as db-model]
             [frontend.db.utils :as db-utils]
             [frontend.fs :as fs]
             [frontend.handler.editor :as editor-handler]
+            [frontend.handler.editor.property :as editor-property]
             [frontend.handler.page :as page-handler]
             [frontend.handler.assets :as assets-handler]
             [frontend.handler.notification :as notification]
@@ -18,16 +18,14 @@
             [frontend.util :as util]
             [frontend.extensions.pdf.utils :as pdf-utils]
             [frontend.extensions.pdf.windows :as pdf-windows]
+            [logseq.common.path :as path]
             [logseq.graph-parser.config :as gp-config]
             [logseq.graph-parser.util.block-ref :as block-ref]
             [medley.core :as medley]
             [promesa.core :as p]
             [reitit.frontend.easy :as rfe]
-            [rum.core :as rum]))
-
-(defn hls-file?
-  [filename]
-  (and filename (string? filename) (string/starts-with? filename "hls__")))
+            [rum.core :as rum]
+            [fipp.edn :refer [pprint]]))
 
 (defn inflate-asset
   [original-path]
@@ -68,7 +66,7 @@
   (when hls-file
     (let [repo-cur (state/get-current-repo)
           repo-dir (config/get-repo-dir repo-cur)
-          data     (with-out-str (pprint/pprint {:highlights highlights :extra extra}))]
+          data     (with-out-str (pprint {:highlights highlights :extra extra}))]
       (fs/write-file! repo-cur repo-dir hls-file data {:skip-compare? true}))))
 
 (defn resolve-hls-data-by-key$
@@ -82,13 +80,14 @@
   (and hl (not (nil? (get-in hl [:content :image])))))
 
 (defn persist-hl-area-image$
+  "Save pdf highlight area image"
   [^js viewer current new-hl old-hl {:keys [top left width height]}]
   (when-let [^js canvas (and (:key current) (.-canvas (.getPageView viewer (dec (:page new-hl)))))]
     (let [^js doc     (.-ownerDocument canvas)
           ^js canvas' (.createElement doc "canvas")
           dpr         js/window.devicePixelRatio
-          repo-cur    (state/get-current-repo)
-          repo-dir    (config/get-repo-dir repo-cur)
+          repo-url    (state/get-current-repo)
+          repo-dir    (config/get-repo-dir repo-url)
           dw          (* dpr width)
           dh          (* dpr height)]
 
@@ -113,11 +112,11 @@
                                   old-fstamp (and old-hl (get-in old-hl [:content :image]))
                                   fname      (str (:page new-hl) "_" (:id new-hl))
                                   fdir       (str gp-config/local-assets-dir "/" key)
-                                  _          (fs/mkdir-if-not-exists (str repo-dir "/" fdir))
+                                  _          (fs/mkdir-if-not-exists (path/path-join repo-dir fdir))
                                   new-fpath  (str fdir "/" fname "_" fstamp ".png")
                                   old-fpath  (and old-fstamp (str fdir "/" fname "_" old-fstamp ".png"))
-                                  _          (and old-fpath (apply fs/rename! repo-cur (map #(util/node-path.join repo-dir %) [old-fpath new-fpath])))
-                                  _          (fs/write-file! repo-cur repo-dir new-fpath png {:skip-compare? true})]
+                                  _          (and old-fpath (fs/rename! repo-url old-fpath new-fpath))
+                                  _          (fs/write-file! repo-url repo-dir new-fpath png {:skip-compare? true})]
 
                             (js/console.timeEnd :write-area-image))
 
@@ -134,7 +133,7 @@
                                (get-in highlight [:content :image])
                                (js/Date.now))
                    :hl-color (get-in highlight [:properties :color])}]
-      (editor-handler/set-block-property! (:block/uuid block) k v))))
+      (editor-property/set-block-property! (:block/uuid block) k v))))
 
 (defn unlink-hl-area-image$
   [^js _viewer current hl]
@@ -148,43 +147,42 @@
 
       (fs/unlink! repo-cur fpath {}))))
 
-(defn resolve-ref-page
+(defn ensure-ref-page!
   [pdf-current]
-  (let [page-name (:key pdf-current)
-        page-name (string/trim page-name)
-        page-name (str "hls__" page-name)
-        page      (db-model/get-page page-name)
-        file-path (:original-path pdf-current)
-        format    (state/get-preferred-format)
-        repo-dir  (config/get-repo-dir (state/get-current-repo))
-        asset-dir (util/node-path.join repo-dir gp-config/local-assets-dir)
-        url       (if (string/includes? file-path asset-dir)
-                    (str ".." (last (string/split file-path repo-dir)))
-                    file-path)]
-    (if-not page
-      (let [label (:filename pdf-current)]
-        (page-handler/create! page-name {:redirect?        false :create-first-block? false
-                                         :split-namespace? false
-                                         :format           format
-                                         :properties       {:file      (case format
-                                                                         :markdown
-                                                                         (util/format "[%s](%s)" label url)
+  (when-let [page-name (util/trim-safe (:key pdf-current))]
+    (let [page-name (str "hls__" page-name)
+          page (db-model/get-page page-name)
+          file-path (:original-path pdf-current)
+          format (state/get-preferred-format)
+          repo-dir (config/get-repo-dir (state/get-current-repo))
+          asset-dir (util/node-path.join repo-dir gp-config/local-assets-dir)
+          url (if (string/includes? file-path asset-dir)
+                (str ".." (last (string/split file-path repo-dir)))
+                file-path)]
+      (if-not page
+        (let [label (:filename pdf-current)]
+          (page-handler/create! page-name {:redirect?        false :create-first-block? false
+                                           :split-namespace? false
+                                           :format           format
+                                           :properties       {:file      (case format
+                                                                           :markdown
+                                                                           (util/format "[%s](%s)" label url)
 
-                                                                         :org
-                                                                         (util/format "[[%s][%s]]" url label)
+                                                                           :org
+                                                                           (util/format "[[%s][%s]]" url label)
 
-                                                                         url)
-                                                            :file-path url}})
-        (db-model/get-page page-name))
+                                                                           url)
+                                                              :file-path url}})
+          (db-model/get-page page-name))
 
-      ;; try to update file path
-      (page-property/add-property! page-name :file-path url))
-    page))
+        ;; try to update file path
+        (page-property/add-property! page-name :file-path url))
+      page)))
 
 (defn ensure-ref-block!
   ([pdf hl] (ensure-ref-block! pdf hl nil))
   ([pdf-current {:keys [id content page properties]} insert-opts]
-   (when-let [ref-page (and pdf-current (resolve-ref-page pdf-current))]
+   (when-let [ref-page (and pdf-current (ensure-ref-page! pdf-current))]
      (let [ref-block (db-model/query-block-by-uuid id)]
        (if-not (nil? (:block/content ref-block))
          (do
@@ -217,8 +215,8 @@
   [highlight ^js viewer]
   (when-let [ref-block (ensure-ref-block! (state/get-current-pdf) highlight)]
     (util/copy-to-clipboard!
-     (block-ref/->block-ref (:block/uuid ref-block)) nil
-     (pdf-windows/resolve-own-window viewer))))
+     (block-ref/->block-ref (:block/uuid ref-block))
+     :owner-window (pdf-windows/resolve-own-window viewer))))
 
 (defn open-block-ref!
   [block]

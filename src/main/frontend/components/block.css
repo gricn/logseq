@@ -1,7 +1,7 @@
 .block-content-wrapper {
   /* 38px is the width of block-control */
   width: calc(100% - 22px);
-
+  user-select: text;
   @screen sm {
     width: calc(100% - 33px);
     overflow-x: visible;
@@ -99,6 +99,34 @@
   }
 }
 
+.breadcrumb {
+  .asset-container > img {
+    height: 18px;
+    width: unset !important;
+  }
+
+  .inline-wrap {
+    & > div, & > div > div {
+      display: inherit;
+    }
+  }
+
+  &.block-parents {
+    .ui__icon {
+      position: relative;
+      top: 4px;
+    }
+
+    a {
+      color: var(--ls-primary-text-color);
+
+      &:hover {
+        opacity: 1;
+      }
+    }
+  }
+}
+
 .open-block-ref-link {
   background-color: var(--ls-page-properties-background-color);
   padding: 1px 4px;
@@ -152,15 +180,21 @@
   position: absolute;
   border-radius: 2px;
   opacity: 0.6;
-}
+  border-left-color: var(--lx-gray-09, var(--ls-border-color, var(--rx-gray-09)));
 
-.block-children-left-border:hover {
-  background-color: var(--ls-primary-text-color);
+  &:hover {
+    background-color: var(--lx-gray-10, var(--ls-primary-text-color, var(--rx-gray-10)));
+    opacity: .7;
+  }
+
+  &:active {
+    opacity: 1;
+  }
 }
 
 .block-children {
   border-left: 1px solid;
-  border-left-color: var(--ls-guideline-color, #ddd);
+  border-left-color: var(--lx-gray-04-alpha, var(--ls-guideline-color, var(--rx-gray-04-alpha))) !important;
 
   padding-top: 2px;
   padding-bottom: 3px;
@@ -173,8 +207,15 @@
 }
 
 .block-control-wrap {
-  height: 24px;
-  margin-top: 0;
+  @apply h-[24px] mt-0 pr-[6px];
+
+  &.is-order-list {
+    @apply mr-0 pr-0;
+
+    .bullet-link-wrap {
+      @apply relative left-[-3px];
+    }
+  }
 }
 
 .block-control, .block-control:hover {
@@ -261,10 +302,10 @@
 }
 
 .page-ref {
-  color: var(--ls-link-ref-text-color);
+  color: var(--lx-accent-11, var(--ls-link-text-color, hsl(var(--primary)/.8)));
 
   &:hover {
-    color: var(--ls-link-ref-text-hover-color);
+    color: var(--lx-accent-11, var(--ls-link-text-color, hsl(var(--primary))));
   }
 }
 
@@ -302,14 +343,10 @@
   }
 }
 
-.block-properties {
+.block-properties, .page-properties {
   margin: 4px 0;
   padding: 4px 8px;
-  background-color: var(--ls-block-properties-background-color, #f0f8ff);
-}
-
-.page-properties {
-  background-color: var(--ls-page-properties-background-color);
+  background-color: var(--lx-gray-03, var(--ls-block-properties-background-color, var(--rx-gray-03)));
 }
 
 .block-marker {
@@ -336,11 +373,11 @@
   transition: background-color 0.3s cubic-bezier(0.16, 1, 0.3, 1);
 
   &.selected {
-    border-bottom-color: var(--ls-primary-background-color);
+    border-radius: 2px;
+  }
 
-    &:last-child {
-      border-bottom-color: transparent;
-    }
+  span.bullet-container:not(.as-order-list) .selected {
+    border: 3px solid;
   }
 }
 
@@ -442,7 +479,11 @@
 }
 
 .color-level {
-  background-color: var(--color-level-1);
+  background-color: var(--lx-gray-02, var(--color-level-1, var(--rx-gray-02)));
+
+  .dark & {
+    background-color: var(--lx-gray-01, var(--color-level-1, var(--rx-gray-01)));
+  }
 
   & .color-level {
     background-color: var(--color-level-2);
@@ -485,6 +526,30 @@
   }
 }
 
+.color-level-1 {
+  background-color: var(--color-level-1);
+}
+
+.color-level-2 {
+  background-color: var(--color-level-2);
+}
+
+.color-level-3 {
+  background-color: var(--color-level-3);
+}
+
+.color-level-4 {
+  background-color: var(--color-level-4);
+}
+
+.color-level-5 {
+  background-color: var(--color-level-5);
+}
+
+.color-level-6 {
+  background-color: var(--color-level-6);
+}
+
 .bullet-container {
   display: flex;
   height: 16px;
@@ -497,25 +562,50 @@
     background-color: var(--ls-block-bullet-color, #8fbc8f);
   }
 
+  &.as-order-list {
+    @apply w-[22px] whitespace-nowrap justify-center pl-[3px];
+  }
+
   .bullet {
-    border-radius: 50%;
-    width: 6px;
-    height: 6px;
-    background-color: var(--ls-block-bullet-color, #394b59);
-    transition: transform 0.2s;
+    @apply rounded-full w-[6px] h-[6px] text-[15px] opacity-80;
+
+    > * {
+      @apply cursor-pointer;
+    }
   }
 
-  &.bullet-closed {
-    background-color: var(--ls-block-bullet-border-color, #ced9e0);
+  &:not(.typed-list) {
+    &.bullet-closed {
+      background-color: var(--lx-gray-04-alpha, var(--ls-block-bullet-border-color, var(--rx-gray-04-alpha)));
+    }
+
+    .bullet {
+      background-color: var(--lx-gray-08, var(--ls-block-bullet-color, var(--rx-gray-08)));
+      transition: transform 0.2s;
+    }
+  }
+
+  &.typed-list:not(:focus-within) {
+    .bullet {
+      background-color: unset;
+      height: unset;
+      width: unset;
+      box-shadow: none;
+    }
   }
 }
 
-a:hover > .bullet-container .bullet {
-  transform: scale(1.4);
-}
+.bullet-link-wrap {
+  color: var(--ls-primary-text-color);
 
-a:hover > .bullet-container {
-  background-color: var(--ls-block-bullet-border-color, #ced9e0);
+  &:hover > .bullet-container:not(.typed-list) {
+    background-color: var(--lx-gray-04-alpha, var(--ls-block-bullet-border-color, var(--rx-gray-04-alpha)));
+
+    .bullet {
+      transform: scale(1.2);
+      background-color: var(--lx-gray-08, var(--ls-block-bullet-color, var(--rx-gray-08))) !important;
+    }
+  }
 }
 
 .content.doc-mode {
@@ -535,6 +625,12 @@ a:hover > .bullet-container {
 
   .block-children-container {
     margin-left: 18px;
+  }
+}
+
+.ls-block .custom-query {
+  > .th {
+    @apply flex flex-row flex-1 items-center justify-between my-1 text-xs opacity-90;
   }
 }
 
@@ -618,14 +714,6 @@ a.cloze-revealed {
   background-color: var(--ls-selection-background-color);
 }
 
-.block-parents a {
-  color: var(--ls-primary-text-color);
-}
-
-.block-parents a:hover {
-  opacity: 1;
-}
-
 .cp__fenced-code-block {
   .not-edit {
     cursor: default;
@@ -652,5 +740,27 @@ html.is-mac {
     .block-content {
       cursor: pointer;
     }
+  }
+}
+
+.references-blocks {
+  &-wrap {
+    .foldable-title {
+      @apply ml-3;
+
+      .block-control {
+        @apply relative right-[-5px] top-[1px];
+      }
+    }
+  }
+
+  &-item {
+    @apply bg-gray-03 rounded p-4;
+  }
+}
+
+.cp__right-sidebar-inner {
+  .references-blocks-item {
+    @apply bg-gray-04;
   }
 }

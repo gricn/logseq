@@ -10,7 +10,7 @@
             [clojure.walk :as walk]
             [logseq.graph-parser.block :as gp-block]
             [datascript.core :as d]
-            [frontend.test.helper :as test-helper]
+            [frontend.test.helper :as test-helper :refer [load-test-files]]
             [clojure.set :as set]))
 
 (def test-db test-helper/test-db)
@@ -245,7 +245,7 @@
                    :db/id 147,
                    :block/parent #:db{:id 144},
                    :block/page #:db{:id 144}}]]
-      (= blocks (outliner-core/fix-top-level-blocks blocks)))))
+      (is (= blocks (outliner-core/fix-top-level-blocks blocks))))))
 
 (deftest test-outdent-blocks
   (testing "
@@ -439,6 +439,63 @@
     (is (=
          '(16 17)
          (map :block/uuid (tree/get-sorted-block-and-children test-db (:db/id (get-block 16))))))))
+
+(defn- save-block!
+  [block]
+  (outliner-tx/transact! {:graph test-db}
+                         (outliner-core/save-block! block)))
+
+(deftest save-test
+  (load-test-files [{:file/path "pages/page1.md"
+                     :file/content "alias:: foo, bar
+tags:: tag1, tag2
+- block #blarg #bar"}])
+  (testing "save deletes a page's tags"
+      (let [conn (db/get-db test-helper/test-db false)
+            pre-block (->> (d/q '[:find (pull ?b [*])
+                                  :where [?b :block/pre-block? true]]
+                                @conn)
+                           ffirst)
+            _ (save-block! (-> pre-block
+                               (update :block/properties dissoc :tags)
+                               (update :block/properties-text-values dissoc :tags)))
+            updated-page (-> (d/q '[:find (pull ?bp [* {:block/alias [*]}])
+                                    :where [?b :block/pre-block? true]
+                                    [?b :block/page ?bp]]
+                                  @conn)
+                             ffirst)]
+        (is (nil? (:block/tags updated-page))
+            "Page's tags are deleted")
+        (is (= #{"foo" "bar"} (set (map :block/name (:block/alias updated-page))))
+            "Page's aliases remain the same")
+        (is (= {:block/properties {:alias #{"foo" "bar"}}
+                :block/properties-text-values {:alias "foo, bar"}}
+               (select-keys updated-page [:block/properties :block/properties-text-values]))
+            "Page property attributes are correct")
+        (is (= {:block/properties {:alias #{"foo" "bar"}}
+                :block/properties-text-values {:alias "foo, bar"}}
+               (-> (d/q '[:find (pull ?b [*])
+                          :where [?b :block/pre-block? true]]
+                        @conn)
+                   ffirst
+                   (select-keys [:block/properties :block/properties-text-values])))
+            "Pre-block property attributes are correct")))
+
+  (testing "save deletes orphaned pages when a block's refs change"
+    (let [conn (db/get-db test-helper/test-db false)
+          pages (set (map first (d/q '[:find ?bn :where [?b :block/name ?bn]] @conn)))
+          _ (assert (set/subset? #{"blarg" "bar"} pages) "Pages from block exist")
+          block-with-refs (ffirst (d/q '[:find (pull ?b [* {:block/refs [*]}])
+                                         :where [?b :block/content "block #blarg #bar"]]
+                                       @conn))
+          _ (save-block! (-> block-with-refs
+                             (assoc :block/content "block"
+                                    :block/refs [])))
+          updated-pages (set (map first (d/q '[:find ?bn :where [?b :block/name ?bn]] @conn)))]
+      (is (not (contains? updated-pages "blarg"))
+          "Deleted, orphaned page no longer exists")
+      (is (contains? updated-pages "bar")
+          "Deleted but not orphaned page still exists"))))
 
 ;;; Fuzzy tests
 
@@ -678,41 +735,42 @@
                  :block/uuid #uuid "62f4b8c6-072e-4133-90e2-0591021a7fea",
                  :block/parent #:db{:id 2333},
                  :db/id 2334}]]
-    (= (tree/non-consecutive-blocks->vec-tree blocks)
-       '({:db/id 2315,
-          :block/uuid #uuid "62f49b4c-f9f0-4739-9985-8bd55e4c68d4",
-          :block/parent #:db{:id 2313},
-          :block/page #:db{:id 2313},
-          :block/level 1,
-          :block/children
-          [{:db/id 2316,
-            :block/uuid #uuid "62f49b4c-aa84-416e-9554-b486b4e59b1b",
-            :block/parent #:db{:id 2315},
-            :block/page #:db{:id 2313},
-            :block/level 2,
-            :block/children
-            [{:db/id 2317,
-              :block/uuid #uuid "62f49b4c-f80c-49b4-ae83-f78c4520c071",
-              :block/parent #:db{:id 2316},
-              :block/page #:db{:id 2313},
-              :block/level 3,
-              :block/children
-              [{:db/id 2318,
-                :block/uuid #uuid "62f49b4c-8f5b-4a04-b749-68d34b28bcf2",
-                :block/parent #:db{:id 2317},
-                :block/page #:db{:id 2313},
-                :block/level 4}]}]}
-           {:db/id 2333,
-            :block/uuid #uuid "62f4b8c1-a99b-434f-84c3-011d6afc48ba",
-            :block/parent #:db{:id 2315},
-            :block/page #:db{:id 2313},
-            :block/level 2,
-            :block/children
-            [{:db/id 2334,
-              :block/uuid #uuid "62f4b8c6-072e-4133-90e2-0591021a7fea",
-              :block/parent #:db{:id 2333},
-              :block/page #:db{:id 2313},
-              :block/level 3}]}]}))))
+    (is
+     (= (tree/non-consecutive-blocks->vec-tree blocks)
+        '({:db/id 2315,
+           :block/uuid #uuid "62f49b4c-f9f0-4739-9985-8bd55e4c68d4",
+           :block/parent #:db{:id 2313},
+           :block/page #:db{:id 2313},
+           :block/level 1,
+           :block/children
+           [{:db/id 2316,
+             :block/uuid #uuid "62f49b4c-aa84-416e-9554-b486b4e59b1b",
+             :block/parent #:db{:id 2315},
+             :block/page #:db{:id 2313},
+             :block/level 2,
+             :block/children
+             [{:db/id 2317,
+               :block/uuid #uuid "62f49b4c-f80c-49b4-ae83-f78c4520c071",
+               :block/parent #:db{:id 2316},
+               :block/page #:db{:id 2313},
+               :block/level 3,
+               :block/children
+               [{:db/id 2318,
+                 :block/uuid #uuid "62f49b4c-8f5b-4a04-b749-68d34b28bcf2",
+                 :block/parent #:db{:id 2317},
+                 :block/page #:db{:id 2313},
+                 :block/level 4}]}]}
+            {:db/id 2333,
+             :block/uuid #uuid "62f4b8c1-a99b-434f-84c3-011d6afc48ba",
+             :block/parent #:db{:id 2315},
+             :block/page #:db{:id 2313},
+             :block/level 2,
+             :block/children
+             [{:db/id 2334,
+               :block/uuid #uuid "62f4b8c6-072e-4133-90e2-0591021a7fea",
+               :block/parent #:db{:id 2333},
+               :block/page #:db{:id 2313},
+               :block/level 3}]}]})))))
 
 (comment
   (dotimes [i 5]

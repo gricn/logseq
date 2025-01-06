@@ -6,10 +6,11 @@
             ["buffer" :as buffer]
             ["diff-match-patch" :as google-diff]
             ["electron" :refer [app autoUpdater dialog ipcMain shell]]
+            ["electron-window-state" :as windowStateKeeper]
             ["fs" :as fs]
             ["fs-extra" :as fs-extra]
             ["os" :as os]
-            ["path" :as path]
+            ["path" :as node-path]
             [cljs-bean.core :as bean]
             [cljs.reader :as reader]
             [clojure.core.async :as async]
@@ -28,6 +29,8 @@
             [electron.state :as state]
             [electron.utils :as utils]
             [electron.window :as win]
+            [goog.functions :refer [debounce]]
+            [logseq.common.graph :as common-graph]
             [promesa.core :as p]))
 
 (defmulti handle (fn [_window args] (keyword (first args))))
@@ -38,28 +41,8 @@
 (defmethod handle :mkdir-recur [_window [_ dir]]
   (fs/mkdirSync dir #js {:recursive true}))
 
-(defn- readdir
-  "Read directory recursively, return all filenames"
-  [root-dir]
-  (->> (tree-seq
-        (fn [[is-dir _fpath]]
-          is-dir)
-        (fn [[_is-dir dir]]
-          (let [files (fs/readdirSync dir #js {:withFileTypes true})]
-            (->> files
-                 (remove #(.isSymbolicLink ^js %))
-                 (remove #(string/starts-with? (.-name ^js %) "."))
-                 (map #(do
-                         [(.isDirectory %)
-                          (.join path dir (.-name %))])))))
-        [true root-dir])
-       (filter (complement first))
-       (map second)
-       (map utils/fix-win-path!)
-       (vec)))
-
 (defmethod handle :readdir [_window [_ dir]]
-  (readdir dir))
+  (common-graph/readdir dir))
 
 (defmethod handle :listdir [_window [_ dir flat?]]
   (when (and dir (fs-extra/pathExistsSync dir))
@@ -94,15 +77,21 @@
              (string? new-content)
              (string-some-deleted? db-content new-content))
     (logger/info ::backup "backup db file" path)
-    (backup-file/backup-file repo :backup-dir path (path/extname path) db-content)))
+    (backup-file/backup-file repo :backup-dir path (node-path/extname path) db-content)))
 
 (defmethod handle :addVersionFile [_window [_ repo path content]]
-  (backup-file/backup-file repo :version-file-dir path (path/extname path) content))
+  (backup-file/backup-file repo :version-file-dir path (node-path/extname path) content))
 
 (defmethod handle :openFileBackupDir [_window [_ repo path]]
   (when (string? path)
-    (let [dir (backup-file/get-backup-dir repo path)]
-      (.openPath shell dir))))
+    (let [dir (backup-file/get-backup-dir repo path)
+          full-path (utils/to-native-win-path! dir)]
+      (.openPath shell full-path))))
+
+(defmethod handle :openFileInFolder [_window [_ full-path]]
+  (when-let [full-path (utils/to-native-win-path! full-path)]
+    (logger/info ::open-file-in-folder full-path)
+    (.showItemInFolder shell full-path)))
 
 (defmethod handle :readFile [_window [_ path]]
   (utils/read-file path))
@@ -115,20 +104,30 @@
     (catch :default _e
       false)))
 
+(defn chmod-enabled?
+  []
+  (if (= nil (cfgs/get-item :feature/enable-automatic-chmod?))
+    true
+    (cfgs/get-item :feature/enable-automatic-chmod?)))
+
+(defmethod handle :copyFile [_window [_ _repo from-path to-path]]
+  (logger/info ::copy-file from-path to-path)
+  (fs-extra/copy from-path to-path))
+
 (defmethod handle :writeFile [window [_ repo path content]]
   (let [^js Buf (.-Buffer buffer)
         ^js content (if (instance? js/ArrayBuffer content)
                       (.from Buf content)
                       content)]
     (try
-      (when (and (fs/existsSync path) (not (writable? path)))
+      (when (and (chmod-enabled?) (fs/existsSync path) (not (writable? path)))
         (fs/chmodSync path "644"))
       (fs/writeFileSync path content)
       (fs/statSync path)
       (catch :default e
         (logger/warn ::write-file path e)
         (let [backup-path (try
-                            (backup-file/backup-file repo :backup-dir path (path/extname path) content)
+                            (backup-file/backup-file repo :backup-dir path (node-path/extname path) content)
                             (catch :default e
                               (logger/error ::write-file "backup file failed:" e)))]
           (utils/send-to-renderer window "notification" {:type "error"
@@ -147,29 +146,18 @@
 (defmethod handle :stat [_window [_ path]]
   (fs/statSync path))
 
-(defonce allowed-formats
-  #{:org :markdown :md :edn :json :js :css :excalidraw :tldr})
-
-(defn get-ext
-  [p]
-  (-> (.extname path p)
-      (subs 1)
-      keyword))
-
 (defn- get-files
+  "Returns vec of file-objs"
   [path]
-  (let [result (->>
-                (readdir path)
-                (remove (partial utils/ignored-path? path))
-                (filter #(contains? allowed-formats (get-ext %)))
-                (map (fn [path]
-                       (let [stat (fs/statSync path)]
-                         (when-not (.isDirectory stat)
-                           {:path    (utils/fix-win-path! path)
-                            :content (utils/read-file path)
-                            :stat    stat}))))
-                (remove nil?))]
-    (vec (cons {:path (utils/fix-win-path! path)} result))))
+  (->> (common-graph/get-files path)
+       (map (fn [path]
+              (let [stat (fs/statSync path)]
+                (when-not (.isDirectory stat)
+                  {:path    (utils/fix-win-path! path)
+                   :content (utils/read-file path)
+                   :stat    stat}))))
+       (remove nil?)
+       vec))
 
 (defn open-dir-dialog []
   (p/let [result (.showOpenDialog dialog (bean/->js
@@ -193,12 +181,14 @@
 
 (defmethod handle :openDir [^js window _messages]
   (logger/info ::open-dir "open folder selection dialog")
-  (p/let [path (open-dir-dialog)]
+  (p/let [path (open-dir-dialog)
+          path (utils/fix-win-path! path)]
     (logger/debug ::open-dir {:path path})
     (if path
       (try
-        (p/resolved (bean/->js (get-files path)))
-        (catch js/Error e 
+        (p/resolved (bean/->js {:path path
+                                :files (get-files path)}))
+        (catch js/Error e
           (do
             (utils/send-to-renderer window "notification" {:type "error"
                                                            :payload (str "Opening the specified directory failed.\n"
@@ -209,7 +199,9 @@
 
 (defmethod handle :getFiles [_window [_ path]]
   (logger/debug ::get-files {:path path})
-  (get-files path))
+  (p/let [files (get-files path)]
+    (bean/->js {:path path
+                :files files})))
 
 (defn- sanitize-graph-name
   [graph-name]
@@ -228,18 +220,18 @@
 (defn- get-graphs-dir
   []
   (let [dir (if utils/ci?
-              (.resolve path js/__dirname "../tmp/graphs")
-              (.join path (.homedir os) ".logseq" "graphs"))]
+              (.resolve node-path js/__dirname "../tmp/graphs")
+              (.join node-path (.homedir os) ".logseq" "graphs"))]
     (fs-extra/ensureDirSync dir)
     dir))
 
 (defn- get-graphs
-  "Returns all graph names in the cache directory (strating with `logseq_local_`)"
+  "Returns all graph names in the cache directory (starting with `logseq_local_`)"
   []
   (let [dir (get-graphs-dir)]
-    (->> (readdir dir)
+    (->> (common-graph/readdir dir)
          (remove #{dir})
-         (map #(path/basename % ".transit"))
+         (map #(node-path/basename % ".transit"))
          (map graph-name->path))))
 
 ;; TODO support alias mechanism
@@ -259,13 +251,13 @@
 (defn- read-txid-info!
   [root]
   (try
-    (let [txid-path (.join path root "logseq/graphs-txid.edn")]
+    (let [txid-path (.join node-path root "logseq/graphs-txid.edn")]
       (when (fs/existsSync txid-path)
         (when-let [sync-meta (and (not (string/blank? root))
                                   (.toString (.readFileSync fs txid-path)))]
           (reader/read-string sync-meta))))
     (catch :default e
-      (js/console.debug "[read txid meta] #" root (.-message e)))))
+      (logger/error "[read txid meta] #" root (.-message e)))))
 
 (defmethod handle :inflateGraphsInfo [_win [_ graphs]]
   (if (seq graphs)
@@ -285,7 +277,7 @@
   (when graph-name
     (let [graph-name (sanitize-graph-name graph-name)
           dir (get-graphs-dir)]
-      (.join path dir (str graph-name ".transit")))))
+      (.join node-path dir (str graph-name ".transit")))))
 
 (defn- get-serialized-graph
   [graph-name]
@@ -362,7 +354,7 @@
 
   (let [path (.getPath ^object app "userData")]
     (doseq [dir ["search" "IndexedDB"]]
-      (let [path (path/join path dir)]
+      (let [path (node-path/join path dir)]
         (try
           (fs-extra/removeSync path)
           (catch :default e
@@ -426,7 +418,7 @@
   (zipmap urls (for [url urls]
                  (try
                    (and (fs-extra/pathExistsSync url)
-                        (fs-extra/pathExistsSync (path/join url "package.json")))
+                        (fs-extra/pathExistsSync (node-path/join url "package.json")))
                    (catch :default _e false)))))
 
 (defmethod handle :relaunchApp []
@@ -448,11 +440,12 @@
   js/__dirname)
 
 (defmethod handle :getAppBaseInfo [^js win [_ _opts]]
-  {:isFullScreen (.isFullScreen win)})
+  {:isFullScreen (.isFullScreen win)
+   :isMaximized (.isMaximized win)})
 
 (defmethod handle :getAssetsFiles [^js win [_ {:keys [exts]}]]
   (when-let [graph-path (state/get-window-graph-path win)]
-    (when-let [assets-path (.join path graph-path "assets")]
+    (when-let [assets-path (.join node-path graph-path "assets")]
       (when (fs-extra/pathExistsSync assets-path)
         (p/let [^js files (js-utils/getAllFiles assets-path (clj->js exts))]
           files)))))
@@ -468,7 +461,6 @@
   (let [old-path (state/get-window-graph-path window)]
     (when (and old-path graph-path (not= old-path graph-path))
       (close-watcher-when-orphaned! window old-path))
-    (swap! state/state assoc :graph/current graph-path)
     (swap! state/state assoc-in [:window/graph window] graph-path)
     nil))
 
@@ -476,14 +468,14 @@
   (when graph-name
     (set-current-graph! window (utils/get-graph-dir graph-name))))
 
-(defmethod handle :runGit [_ [_ args]]
-  (when (seq args)
-    (git/raw! args)))
+(defmethod handle :runGit [_ [_ {:keys [repo command]}]]
+  (when (seq command)
+    (git/raw! (utils/get-graph-dir repo) command)))
 
-(defmethod handle :runGitWithinCurrentGraph [_ [_ args]]
-  (when (seq args)
-    (git/init!)
-    (git/run-git2! (clj->js args))))
+(defmethod handle :runGitWithinCurrentGraph [_ [_ {:keys [repo command]}]]
+  (when (seq command)
+    (git/init! (utils/get-graph-dir repo))
+    (git/run-git2! (utils/get-graph-dir repo) (clj->js command))))
 
 (defmethod handle :runCli [window [_ {:keys [command args returnResult]}]]
   (try
@@ -506,8 +498,14 @@
 (defmethod handle :gitCommitAll [_ [_ message]]
   (git/add-all-and-commit! message))
 
-(defmethod handle :gitStatus [_ [_]]
-  (git/short-status!))
+(defmethod handle :gitStatus [_ [_ repo]]
+  (git/short-status! (utils/get-graph-dir repo)))
+
+(def debounced-configure-auto-commit! (debounce git/configure-auto-commit! 5000))
+(defmethod handle :setGitAutoCommit []
+  (debounced-configure-auto-commit!)
+  nil)
+
 
 (defmethod handle :installMarketPlugin [_ [_ mft]]
   (plugin/install-or-update! mft))
@@ -625,6 +623,24 @@
   (when-let [web-content (.-webContents win)]
     (.reload web-content)))
 
+(defmethod handle :window-minimize [^js win]
+  (.minimize win))
+
+(defmethod handle :window-toggle-maximized [^js win]
+  (if (.isMaximized win)
+    (.unmaximize win)
+    (.maximize win)))
+
+(defmethod handle :window-toggle-fullscreen [^js win]
+  (.setFullScreen win (not (.isFullScreen win))))
+
+(defmethod handle :window-close [^js win]
+  (.close win))
+
+(defmethod handle :theme-loaded [^js win]
+  (.manage (windowStateKeeper) win)
+  (.show win))
+
 ;;;;;;;;;;;;;;;;;;;;;;;
 ;; file-sync-rs-apis ;;
 ;;;;;;;;;;;;;;;;;;;;;;;
@@ -646,6 +662,9 @@
 
 (defmethod handle :delete-local-files [_ args]
   (apply rsapi/delete-local-files (rest args)))
+
+(defmethod handle :fetch-remote-files [_ args]
+  (apply rsapi/fetch-remote-files (rest args)))
 
 (defmethod handle :update-local-files [_ args]
   (apply rsapi/update-local-files (rest args)))
@@ -715,6 +734,9 @@
 
 (defmethod handle :server/set-config [^js _win [_ config]]
   (server/set-config! config))
+
+(defmethod handle :window/open-blank-callback [^js win [_ _type]]
+  (win/setup-window-listeners! win) nil)
 
 (defn set-ipc-handler! [window]
   (let [main-channel "main"]

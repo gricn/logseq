@@ -14,10 +14,13 @@
 (defn- is-tweet-link
   [url]
   (when (not-empty url)
-    (re-matches #"^https://twitter\.com/.*?/status/.*?$" url)))
+    (or (re-matches #"^https://twitter\.com/.*?/status/.*?$" url)
+        (re-matches #"^https://x\.com/.*?/status/.*?$" url))))
 
 (defn quick-capture [args]
   (let [{:keys [url title content page append]} (bean/->clj args)
+        title (or title "")
+        url (or url "")
         insert-today? (get-in (state/get-config)
                               [:quick-capture-options :insert-today?]
                               false)

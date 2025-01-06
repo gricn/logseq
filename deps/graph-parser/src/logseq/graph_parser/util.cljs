@@ -80,11 +80,13 @@
   (and (string? v) (>= (count v) 2) (= "\"" (first v) (last v))))
 
 (defn url?
+  "Test if it is a `protocol://`-style URL.
+
+   NOTE: Can not handle mailto: links, use this with caution."
   [s]
   (and (string? s)
        (try
-         (js/URL. s)
-         true
+         (not (contains? #{nil "null"} (.-origin (js/URL. s))))
          (catch :default _e
            false))))
 
@@ -191,7 +193,7 @@
     (keyword format)))
 
 (defn path->file-name
-  ;; Only for interal paths, as they are converted to POXIS already
+  ;; Only for internal paths, as they are converted to POXIS already
   ;; https://github.com/logseq/logseq/blob/48b8e54e0fdd8fbd2c5d25b7f1912efef8814714/deps/graph-parser/src/logseq/graph_parser/extract.cljc#L32
   ;; Should be converted to POXIS first for external paths
   [path]
@@ -211,6 +213,7 @@
   (second (re-find #"(?:\.)(\w+)[^.]*$" path-or-file-name)))
 
 (defn get-format
+  "File path to format keyword, :org, :markdown, etc."
   [file]
   (when file
     (normalize-format (keyword (some-> (path->file-ext file) string/lower-case)))))
@@ -255,12 +258,14 @@
     (legacy-title-parsing file-name-body)))
 
 (defn safe-read-string
-  [content]
-  (try
-    (reader/read-string content)
-    (catch :default e
-      (log/error :parse/read-string-failed e)
-      {})))
+  ([content]
+   (safe-read-string {} content))
+  ([opts content]
+   (try
+     (reader/read-string opts content)
+     (catch :default e
+       (log/error :parse/read-string-failed e)
+       {}))))
 
 ;; Copied from Medley
 ;; https://github.com/weavejester/medley/blob/d1e00337cf6c0843fb6547aadf9ad78d981bfae5/src/medley/core.cljc#L22

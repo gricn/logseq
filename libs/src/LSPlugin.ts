@@ -6,7 +6,8 @@ import { LSPluginExperiments } from './modules/LSPlugin.Experiments'
 import { IAsyncStorage, LSPluginFileStorage } from './modules/LSPlugin.Storage'
 import { LSPluginRequest } from './modules/LSPlugin.Request'
 
-export type WithOptional<T, K extends keyof T> = Omit<T, K> & Partial<Pick<T, K>>;
+export type WithOptional<T, K extends keyof T> = Omit<T, K> &
+  Partial<Pick<T, K>>
 
 export type PluginLocalIdentity = string
 
@@ -33,8 +34,6 @@ export type StyleOptions = {
 export type UIContainerAttrs = {
   draggable: boolean
   resizable: boolean
-
-  [key: string]: any
 }
 
 export type UIBaseOptions = {
@@ -75,20 +74,34 @@ export interface LSPluginPkgConfig {
   mode: 'shadow' | 'iframe'
   themes: Theme[]
   icon: string
-
-  [key: string]: any
+  /**
+   * Alternative entrypoint for development.
+   */
+  devEntry: unknown
+  /**
+   * For legacy themes, do not use.
+   */
+  theme: unknown
 }
 
 export interface LSPluginBaseInfo {
-  id: string // should be unique
+  /**
+   * Must be unique.
+   */
+  id: string
   mode: 'shadow' | 'iframe'
-
   settings: {
     disabled: boolean
-    [key: string]: any
-  }
-
-  [key: string]: any
+  } & Record<string, unknown>
+  effect: boolean
+  /**
+   * For internal use only. Indicates if plugin is installed in dot root.
+   */
+  iir: boolean
+  /**
+   * For internal use only.
+   */
+  lsr: string
 }
 
 export type IHookEvent = {
@@ -128,7 +141,7 @@ export interface AppUserInfo {
 export interface AppInfo {
   version: string
 
-  [key: string]: any
+  [key: string]: unknown
 }
 
 /**
@@ -147,7 +160,7 @@ export interface AppUserConfigs {
   enabledFlashcards: boolean
   enabledJournals: boolean
 
-  [key: string]: any
+  [key: string]: unknown
 }
 
 /**
@@ -158,7 +171,7 @@ export interface AppGraphInfo {
   url: string
   path: string
 
-  [key: string]: any
+  [key: string]: unknown
 }
 
 /**
@@ -170,7 +183,6 @@ export interface BlockEntity {
   left: IEntityID
   format: 'markdown' | 'org'
   parent: IEntityID
-  unordered: boolean
   content: string
   page: IEntityID
   properties?: Record<string, any>
@@ -184,8 +196,9 @@ export interface BlockEntity {
   level?: number
   meta?: { timestamps: any; properties: any; startPos: number; endPos: number }
   title?: Array<any>
+  marker?: string
 
-  [key: string]: any
+  [key: string]: unknown
 }
 
 /**
@@ -206,7 +219,7 @@ export interface PageEntity {
   journalDay?: number
   updatedAt?: number
 
-  [key: string]: any
+  [key: string]: unknown
 }
 
 export type BlockIdentity = BlockUUID | Pick<BlockEntity, 'uuid'>
@@ -230,9 +243,10 @@ export type BlockCursorPosition = {
   rect: DOMRect
 }
 
+export type Keybinding = string | Array<string>
 export type SimpleCommandKeybinding = {
   mode?: 'global' | 'non-editing' | 'editing'
-  binding: string
+  binding: Keybinding
   mac?: string // special for Mac OS
 }
 
@@ -270,7 +284,6 @@ export type ExternalCommandType =
   | 'logseq.go/next-journal'
   | 'logseq.go/prev-journal'
   | 'logseq.go/search'
-  | 'logseq.go/search-in-page'
   | 'logseq.go/tomorrow'
   | 'logseq.go/backward'
   | 'logseq.go/forward'
@@ -280,7 +293,6 @@ export type ExternalCommandType =
   | 'logseq.ui/goto-plugins'
   | 'logseq.ui/select-theme-color'
   | 'logseq.ui/toggle-brackets'
-  | 'logseq.ui/toggle-cards'
   | 'logseq.ui/toggle-contents'
   | 'logseq.ui/toggle-document-mode'
   | 'logseq.ui/toggle-help'
@@ -289,12 +301,16 @@ export type ExternalCommandType =
   | 'logseq.ui/toggle-settings'
   | 'logseq.ui/toggle-theme'
   | 'logseq.ui/toggle-wide-mode'
-  | 'logseq.command-palette/toggle'
 
 export type UserProxyTags = 'app' | 'editor' | 'db' | 'git' | 'ui' | 'assets'
 
 export type SearchIndiceInitStatus = boolean
-export type SearchBlockItem = { id: EntityID, uuid: BlockIdentity, content: string, page: EntityID }
+export type SearchBlockItem = {
+  id: EntityID
+  uuid: BlockIdentity
+  content: string
+  page: EntityID
+}
 export type SearchPageItem = string
 export type SearchFileItem = string
 
@@ -306,18 +322,23 @@ export interface IPluginSearchServiceHooks {
     graph: string,
     key: string,
     opts: Partial<{ limit: number }>
-  ) =>
-    Promise<{
-      graph: string,
-      key: string,
-      blocks?: Array<Partial<SearchBlockItem>>,
-      pages?: Array<SearchPageItem>,
-      files?: Array<SearchFileItem>
-    }>
+  ) => Promise<{
+    graph: string
+    key: string
+    blocks?: Array<Partial<SearchBlockItem>>
+    pages?: Array<SearchPageItem>
+    files?: Array<SearchFileItem>
+  }>
 
   onIndiceInit: (graph: string) => Promise<SearchIndiceInitStatus>
   onIndiceReset: (graph: string) => Promise<void>
-  onBlocksChanged: (graph: string, changes: { added: Array<SearchBlockItem>, removed: Array<EntityID> }) => Promise<void>
+  onBlocksChanged: (
+    graph: string,
+    changes: {
+      added: Array<SearchBlockItem>
+      removed: Array<EntityID>
+    }
+  ) => Promise<void>
   onGraphRemoved: (graph: string, opts?: {}) => Promise<any>
 }
 
@@ -366,8 +387,14 @@ export interface IAppProxy {
    * @param action
    */
   registerCommandShortcut: (
-    keybinding: SimpleCommandKeybinding,
-    action: SimpleCommandCallback
+    keybinding: SimpleCommandKeybinding | string,
+    action: SimpleCommandCallback,
+    opts?: Partial<{
+      key: string
+      label: string
+      desc: string
+      extras: Record<string, any>
+    }>
   ) => void
 
   /**
@@ -381,15 +408,12 @@ export interface IAppProxy {
   ) => Promise<void>
 
   /**
-   * Call external plugin command provided by models or registerd commands
+   * Call external plugin command provided by models or registered commands
    * @added 0.0.13
    * @param type `xx-plugin-id.commands.xx-key`, `xx-plugin-id.models.xx-key`
    * @param args
    */
-  invokeExternalPlugin: (
-    type: string,
-    ...args: Array<any>
-  ) => Promise<unknown>
+  invokeExternalPlugin: (type: string, ...args: Array<any>) => Promise<unknown>
 
   /**
    * @added 0.0.13
@@ -425,9 +449,11 @@ export interface IAppProxy {
 
   // graph
   getCurrentGraph: () => Promise<AppGraphInfo | null>
-  getCurrentGraphConfigs: () => Promise<any>
+  getCurrentGraphConfigs: (...keys: string[]) => Promise<any>
+  setCurrentGraphConfigs: (configs: {}) => Promise<void>
   getCurrentGraphFavorites: () => Promise<Array<string> | null>
   getCurrentGraphRecent: () => Promise<Array<string> | null>
+  getCurrentGraphTemplates: () => Promise<Record<string, BlockEntity> | null>
 
   // router
   pushState: (
@@ -441,24 +467,16 @@ export interface IAppProxy {
     query?: Record<string, any>
   ) => void
 
-  // ui
-  queryElementById: (id: string) => Promise<string | boolean>
-
-  /**
-   * @added 0.0.5
-   * @param selector
-   */
-  queryElementRect: (selector: string) => Promise<DOMRectReadOnly | null>
-
-  /**
-   * @deprecated Use `logseq.UI.showMsg` instead
-   * @param content
-   * @param status
-   */
-  showMsg: (
-    content: string,
-    status?: 'success' | 'warning' | 'error' | string
-  ) => void
+  // templates
+  getTemplate: (name: string) => Promise<BlockEntity | null>
+  existTemplate: (name: string) => Promise<Boolean>
+  createTemplate: (
+    target: BlockUUID,
+    name: string,
+    opts?: { overwrite: boolean }
+  ) => Promise<any>
+  removeTemplate: (name: string) => Promise<any>
+  insertTemplate: (target: BlockUUID, name: string) => Promise<any>
 
   setZoomFactor: (factor: number) => void
   setFullScreen: (flag: boolean | 'toggle') => void
@@ -480,14 +498,21 @@ export interface IAppProxy {
   onCurrentGraphChanged: IUserHook
   onGraphAfterIndexed: IUserHook<{ repo: string }>
   onThemeModeChanged: IUserHook<{ mode: 'dark' | 'light' }>
-  onThemeChanged: IUserHook<Partial<{ name: string, mode: string, pid: string, url: string }>>
+  onThemeChanged: IUserHook<
+    Partial<{ name: string; mode: string; pid: string; url: string }>>
+  onTodayJournalCreated: IUserHook<{ title: string }>
+  onBeforeCommandInvoked: (condition: ExternalCommandType | string, callback: (e: IHookEvent) => void) => IUserOffHook
+  onAfterCommandInvoked: (condition: ExternalCommandType | string, callback: (e: IHookEvent) => void) => IUserOffHook
 
   /**
    * provide ui slot to specific block with UUID
    *
    * @added 0.0.13
    */
-  onBlockRendererSlotted: IUserConditionSlotHook<BlockUUID, Omit<BlockEntity, 'children' | 'page'>>
+  onBlockRendererSlotted: IUserConditionSlotHook<
+    BlockUUID,
+    Omit<BlockEntity, 'children' | 'page'>
+  >
 
   /**
    * provide ui slot to block `renderer` macro for `{{renderer arg1, arg2}}`
@@ -674,7 +699,7 @@ export interface IEditorProxy extends Record<string, any> {
   insertBatchBlock: (
     srcBlock: BlockIdentity,
     batch: IBatchBlock | Array<IBatchBlock>,
-    opts?: Partial<{ before: boolean; sibling: boolean, keepUUID: boolean }>
+    opts?: Partial<{ before: boolean; sibling: boolean; keepUUID: boolean }>
   ) => Promise<Array<BlockEntity> | null>
 
   updateBlock: (
@@ -774,7 +799,7 @@ export interface IEditorProxy extends Record<string, any> {
     opts?: { replaceState: boolean }
   ) => void
 
-  openInRightSidebar: (uuid: BlockUUID) => void
+  openInRightSidebar: (id: BlockUUID | EntityID) => void
 
   /**
    * @example https://github.com/logseq/logseq-plugin-samples/tree/master/logseq-a-translator
@@ -856,20 +881,16 @@ export type UIMsgOptions = {
 export type UIMsgKey = UIMsgOptions['key']
 
 export interface IUIProxy {
-  /**
-   * @added 0.0.2
-   *
-   * @param content
-   * @param status
-   * @param opts
-   */
   showMsg: (
     content: string,
     status?: 'success' | 'warning' | 'error' | string,
     opts?: Partial<UIMsgOptions>
   ) => Promise<UIMsgKey>
-
   closeMsg: (key: UIMsgKey) => void
+  queryElementRect: (selector: string) => Promise<DOMRectReadOnly | null>
+  queryElementById: (id: string) => Promise<string | boolean>
+  checkSlotValid: (slot: UISlotIdentity['slot']) => Promise<boolean>
+  resolveThemeCssPropsVals: (props: string | Array<string>) => Promise<Record<string, string | undefined> | null>
 }
 
 /**
@@ -880,20 +901,36 @@ export interface IAssetsProxy {
    * @added 0.0.2
    * @param exts
    */
-  listFilesOfCurrentGraph(exts?: string | string[]): Promise<Array<{
-    path: string
-    size: number
-    accessTime: number
-    modifiedTime: number
-    changeTime: number
-    birthTime: number
-  }>>
+  listFilesOfCurrentGraph(exts?: string | string[]): Promise<
+    Array<{
+      path: string
+      size: number
+      accessTime: number
+      modifiedTime: number
+      changeTime: number
+      birthTime: number
+    }>
+  >
 
   /**
    * @example https://github.com/logseq/logseq/pull/6488
    * @added 0.0.10
    */
   makeSandboxStorage(): IAsyncStorage
+
+  /**
+   * make assets scheme url based on current graph
+   * @added 0.0.15
+   * @param path
+   */
+  makeUrl(path: string): Promise<string>
+
+  /**
+   * try to open asset type file in Logseq app
+   * @added 0.0.16
+   * @param path
+   */
+  builtInOpen(path: string): Promise<boolean | undefined>
 }
 
 export interface ILSPluginThemeManager {
@@ -1058,8 +1095,8 @@ export interface ILSPluginUser extends EventEmitter<LSPluginUserEvents> {
 
   resolveResourceFullUrl(filePath: string): string
 
-  App: IAppProxy & Record<string, any>
-  Editor: IEditorProxy & Record<string, any>
+  App: IAppProxy
+  Editor: IEditorProxy
   DB: IDBProxy
   Git: IGitProxy
   UI: IUIProxy

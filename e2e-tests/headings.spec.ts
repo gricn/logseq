@@ -2,7 +2,7 @@ import { expect } from '@playwright/test'
 import { test } from './fixtures'
 import { createRandomPage, editFirstBlock, newInnerBlock } from './utils'
 
-test('set heading to 1 using', async ({ page }) => {
+test('set heading to 1', async ({ page }) => {
     await createRandomPage(page)
 
     await page.type('textarea >> nth=0', 'foo')
@@ -33,8 +33,7 @@ test('remove heading', async ({ page }) => {
 
 test('set heading to 2', async ({ page }) => {
   await page.locator('span.bullet-container >> nth=0').click({button: "right"})
-
-  await page.locator('#custom-context-menu .to-heading-button[title="Heading 2"]').click()
+  await page.locator('#custom-context-menu .to-heading-button[title="Heading 2"]').click({ delay: 400})
 
   expect(await page.locator('.ls-block .block-content >> nth=0').innerHTML()).toContain('<h2>foo</h2>')
 })
@@ -73,6 +72,7 @@ test('set heading of nested block to auto', async ({ page }) => {
 
 test('view nested block on a dedicated page', async ({ page }) => {
   await page.locator('span.bullet-container >> nth=1').click()
+  await page.waitForTimeout(200)
 
   expect(await page.locator('.ls-block .block-content >> nth=0').innerHTML()).toContain('<h1>bar</h1>')
 })

@@ -8,7 +8,8 @@ import { withClampedStyles } from './style-props'
 import { LogseqContext } from '../logseq-context'
 import * as React from 'react'
 
-export const TWITTER_REGEX = /https?:\/\/twitter.com\/[0-9a-zA-Z_]{1,20}\/status\/([0-9]*)/
+// https://regex101.com/r/cazpoJ/2
+export const X_OR_TWITTER_REGEX = /https?:\/\/(x|twitter).com\/[0-9a-zA-Z_]{1,20}\/status\/([0-9]*)/
 
 export interface TweetShapeProps extends TLBoxShapeProps {
   type: 'tweet'
@@ -34,7 +35,7 @@ export class TweetShape extends TLBoxShape<TweetShapeProps> {
 
   @computed get embedId() {
     const url = this.props.url
-    const match = url.match(TWITTER_REGEX)
+    const match = url.match(X_OR_TWITTER_REGEX)
     const embedId = match?.[1] ?? url ?? ''
     return embedId
   }
@@ -83,17 +84,17 @@ export class TweetShape extends TLBoxShape<TweetShapeProps> {
         {...events}
       >
         <div
-          className="rounded-xl w-full h-full relative shadow-xl"
+          className="rounded-xl w-full h-full relative shadow-xl tl-tweet-container"
           style={{
-            pointerEvents: isEditing ? 'all' : 'none',
+            pointerEvents: isEditing || app.readOnly ? 'all' : 'none',
             userSelect: 'none',
           }}
         >
           {this.embedId ? (
-              <div ref={cpRefContainer}>
-                <Tweet tweetId={this.embedId}/>
-              </div>
-          ) : (null)}
+            <div ref={cpRefContainer}>
+              <Tweet tweetId={this.embedId} />
+            </div>
+          ) : null}
         </div>
       </HTMLContainer>
     )
@@ -103,9 +104,19 @@ export class TweetShape extends TLBoxShape<TweetShapeProps> {
     const {
       props: {
         size: [w, h],
+        isLocked,
       },
     } = this
-    return <rect width={w} height={h} fill="transparent" rx={8} ry={8} />
+    return (
+      <rect
+        width={w}
+        height={h}
+        fill="transparent"
+        rx={8}
+        ry={8}
+        strokeDasharray={isLocked ? '8 2' : 'undefined'}
+      />
+    )
   })
 
   useComponentSize<T extends HTMLElement>(ref: React.RefObject<T> | null, selector = '') {
@@ -191,12 +202,7 @@ export class TweetShape extends TLBoxShape<TweetShapeProps> {
     if (embedId) {
       return (
         <g>
-          <rect
-            width={bounds.width}
-            height={bounds.height}
-            fill="#15202b"
-            rx={8}
-            ry={8} />
+          <rect width={bounds.width} height={bounds.height} fill="#15202b" rx={8} ry={8} />
           <svg
             x={bounds.width / 4}
             y={bounds.height / 4}

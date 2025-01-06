@@ -30,6 +30,7 @@ export class BrushingState<
   onExit = () => {
     this.initialSelectedIds = []
     this.tree.clear()
+    this.app.setBrush(undefined)
   }
 
   onPointerMove: TLEvents<S>['pointer'] = () => {
@@ -68,7 +69,7 @@ export class BrushingState<
       // Select hit shapes
       this.app.setSelectedShapes(hits)
     }
-    this.app.viewport.panToPointWhenOutOfBounds(currentPoint)
+    this.app.viewport.panToPointWhenNearBounds(currentPoint)
   }
 
   onPointerUp: TLEvents<S>['pointer'] = () => {

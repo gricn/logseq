@@ -37,13 +37,20 @@ export interface LogseqContextValue {
         renderFn?: (open?: boolean, count?: number) => React.ReactNode
       }
     }>
+    KeyboardShortcut: React.FC<{
+      action?: string,
+      shortcut?: string,
+      opts?: any
+    }>
   }
   handlers: {
+    t: (key: string) => any
     search: (
       query: string,
       filters: { 'pages?': boolean; 'blocks?': boolean; 'files?': boolean }
     ) => Promise<SearchResult>
     addNewWhiteboard: (pageName: string) => void
+    exportToImage: (pageName: string, options: object) => void
     addNewBlock: (content: string) => string // returns the new block uuid
     queryBlockByUUID: (uuid: string) => any
     getBlockPageName: (uuid: string) => string
@@ -52,9 +59,12 @@ export interface LogseqContextValue {
     isWhiteboardPage: (pageName: string) => boolean
     isMobile: () => boolean
     saveAsset: (file: File) => Promise<string>
-    makeAssetUrl: (relativeUrl: string) => string
+    makeAssetUrl: (relativeUrl: string | null) => string
+    inflateAsset: (src: string) => object
+    setCurrentPdf: (src: string | null) => void
     sidebarAddBlock: (uuid: string, type: 'block' | 'page') => void
     redirectToPage: (uuidOrPageName: string) => void
+    copyToClipboard: (text: string, html: string) => void
   }
 }
 

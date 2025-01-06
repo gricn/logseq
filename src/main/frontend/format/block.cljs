@@ -9,7 +9,6 @@
             [frontend.handler.notification :as notification]
             [frontend.state :as state]
             [logseq.graph-parser.block :as gp-block]
-            [logseq.graph-parser.config :as gp-config]
             [logseq.graph-parser.property :as gp-property]
             [logseq.graph-parser.mldoc :as gp-mldoc]
             [lambdaisland.glogi :as log]))
@@ -17,15 +16,15 @@
 (defn extract-blocks
   "Wrapper around logseq.graph-parser.block/extract-blocks that adds in system state
 and handles unexpected failure."
-  [blocks content format {:keys [with-id?]
+  [blocks content format {:keys [with-id? page-name]
                           :or {with-id? true}}]
   (try
     (gp-block/extract-blocks blocks content with-id? format
                              {:user-config (state/get-config)
                               :block-pattern (config/get-block-pattern format)
-                              :supported-formats (gp-config/supported-formats)
                               :db (db/get-db (state/get-current-repo))
-                              :date-formatter (state/get-date-formatter)})
+                              :date-formatter (state/get-date-formatter)
+                              :page-name page-name})
     (catch :default e
       (log/error :exception e)
       (state/pub-event! [:capture-error {:error e

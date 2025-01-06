@@ -6,21 +6,23 @@
             [logseq.graph-parser.test.docs-graph-helper :as docs-graph-helper]
             [logseq.graph-parser.util.block-ref :as block-ref]
             [frontend.db.model :as model]
-            [frontend.db.conn :as conn]))
+            [frontend.db.conn :as conn]
+            [clojure.edn :as edn]
+            ["path" :as node-path]
+            ["fs" :as fs]))
 
-(use-fixtures :each {:before test-helper/start-test-db!
-                     :after test-helper/destroy-test-db!})
+(use-fixtures :each test-helper/start-and-destroy-db)
 
-;; TODO update docs filename rules to the latest version when the namespace PR is released
 (deftest ^:integration parse-and-load-files-to-db
-  (let [graph-dir "src/test/docs"
-        ;; TODO update me to the latest version of doc when namespace is updated
-        _ (docs-graph-helper/clone-docs-repo-if-not-exists graph-dir "v0.6.7")
-        files (gp-cli/build-graph-files graph-dir)
-        _ (repo-handler/parse-files-and-load-to-db! test-helper/test-db files {:re-render? false :verbose false})
+  (let [graph-dir "src/test/docs-0.9.2"
+        _ (docs-graph-helper/clone-docs-repo-if-not-exists graph-dir "v0.9.2")
+        repo-config (edn/read-string (str (fs/readFileSync (node-path/join graph-dir "logseq/config.edn"))))
+        files (#'gp-cli/build-graph-files graph-dir repo-config)
+        _ (test-helper/with-config repo-config
+            (repo-handler/parse-files-and-load-to-db! test-helper/test-db files {:re-render? false :verbose false}))
         db (conn/get-db test-helper/test-db)]
 
-    (docs-graph-helper/docs-graph-assertions db (map :file/path files))))
+    (docs-graph-helper/docs-graph-assertions db graph-dir (map :file/path files))))
 
 (deftest parse-files-and-load-to-db-with-block-refs-on-reload
   (testing "Refs to blocks on a page are retained if that page is reloaded"

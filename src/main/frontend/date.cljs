@@ -1,5 +1,5 @@
 (ns frontend.date
-  "Date related utility fns"
+  "Journal date related utility fns"
   (:require ["chrono-node" :as chrono]
             [cljs-bean.core :as bean]
             [cljs-time.coerce :as tc]
@@ -62,11 +62,13 @@
    (tf/unparse custom-formatter date-time)))
 
 (defn get-locale-string
-  [s]
+  "Accepts a :date-time-no-ms string representation, or a cljs-time date object"
+  [input]
   (try
-    (->> (tf/parse (tf/formatters :date-time-no-ms) s)
-        (t/to-default-time-zone)
-        (tf/unparse (tf/formatter "MMM do, yyyy")))
+    (->> (cond->> input
+          (string? input) (tf/parse (tf/formatters :date-time-no-ms)))
+         (t/to-default-time-zone)
+         (tf/unparse (tf/formatter "MMM do, yyyy")))
     (catch :default _e
       nil)))
 
@@ -152,12 +154,18 @@
    (journal-title-formatters)))
 
 (defn normalize-journal-title
-  "Normalize journal title at best effort. Return nil if title is not a valid date"
+  "Normalize journal title at best effort. Return nil if title is not a valid date.
+   Return goog.date.Date.
+
+   Return format: 20220812T000000"
   [title]
   (and title
        (normalize-date (gp-util/capitalize-all title))))
 
 (defn valid-journal-title?
+  "This is a loose rule, requires double check by journal-title->custom-format.
+
+   BUG: This also accepts strings like 3/4/5 as journal titles"
   [title]
   (boolean (normalize-journal-title title)))
 
@@ -174,6 +182,7 @@
    (date-time-util/safe-journal-title-formatters (state/get-date-formatter))))
 
 (defn journal-day->ts
+  "journal-day format yyyyMMdd"
   [day]
   (when day
     (-> (tf/parse (tf/formatter "yyyyMMdd") (str day))
@@ -183,20 +192,22 @@
   [journal-title]
   (journal-title-> journal-title #(tc/to-long %)))
 
-(def default-journal-title-formatter (tf/formatter "yyyy_MM_dd"))
+(def default-journal-filename-formatter (tf/formatter "yyyy_MM_dd"))
 
 (defn journal-title->default
+  "Journal title to filename format"
   [journal-title]
   (let [formatter (if-let [format (state/get-journal-file-name-format)]
                     (tf/formatter format)
-                    default-journal-title-formatter)]
+                    default-journal-filename-formatter)]
     (journal-title-> journal-title #(tf/unparse formatter %))))
 
 (defn date->file-name
+  "Date object to filename format"
   [date]
   (let [formatter (if-let [format (state/get-journal-file-name-format)]
                     (tf/formatter format)
-                    default-journal-title-formatter)]
+                    default-journal-filename-formatter)]
     (tf/unparse formatter date)))
 
 (defn journal-title->custom-format
@@ -209,12 +220,22 @@
    (tf/formatter "yyyy-MM-dd HH:mm")
    (t/to-default-time-zone (tc/from-long n))))
 
+(def iso-parser (tf/formatter "yyyy-MM-dd'T'HH:mm:ss.SSSS'Z'"))
+(defn parse-iso [string]
+  (tf/parse iso-parser string))
+
 (comment
   (def default-formatter (tf/formatter "MMM do, yyyy"))
   (def zh-formatter (tf/formatter "YYYY年MM月dd日"))
 
-  (tf/show-formatters))
+  (tf/show-formatters)
 
   ;; :date 2020-05-31
   ;; :rfc822 Sun, 31 May 2020 03:00:57 Z
 
+  (let [info {:ExpireTime 1680781356,
+              :UserGroups [],
+              :LemonRenewsAt "2024-04-11T07:28:00.000000Z",
+              :LemonEndsAt nil,
+              :LemonStatus "active"}]
+    (->> info :LemonRenewsAt (tf/parse iso-parser) (< (js/Date.)))))

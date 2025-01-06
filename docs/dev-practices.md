@@ -72,10 +72,41 @@ queries and rules. Our queries are linted through clj-kondo and
 [datalog-parser](https://github.com/lambdaforge/datalog-parser). clj-kondo will
 error if it detects an invalid query.
 
-### Invalid translations
+### Translations
 
-Our translations can be configured incorrectly. We can catch some of these
-mistakes [as noted here](./contributing-to-translations.md#fix-mistakes).
+We use [tongue](https://github.com/tonsky/tongue), a simple and effective
+library, for translations. We have a couple bb tasks for working with
+translations under `lang:` e.g. `bb lang:list`. See [the translator
+guide](./contributing-to-translations.md) for usage.
+
+One useful task for reviewers (us) and contributors alike, is `bb
+lang:validate-translations` which catches [common
+mistakes](./contributing-to-translations.md#fix-mistakes)). When reviewing
+translations here are some things to keep in mind:
+
+* Punctuation and delimiting characters (e.g. `:`, `:`, `?`) should be part of
+  the translatable string. Those characters and their position may vary depending on the language.
+* Translations usually return strings but they can return hiccup vectors with a
+  fn translation. Hiccup vectors are needed when word order matters for a
+  translation and formatting is involved. See [this 3 word Turkish
+  example](https://github.com/logseq/logseq/commit/1d932f07c4a0aad44606da6df03a432fe8421480#r118971415).
+* Translations can be anonymous fns with arguments for interpolating strings. Fns should be simple and only include the following fns: `str`, `when`, `if` and `=`.
+
+### Spell Checker
+
+We use [typos](https://github.com/crate-ci/typos) to spell check our source code.
+
+To install it locally and use it:
+
+```sh
+$ brew install typos-cli
+# Catch any errors
+$ typos
+# Fix errors
+$ typos -w
+```
+
+To configure it e.g. for dealing with false positives, see `typos.toml`.
 
 ## Testing
 
@@ -123,7 +154,17 @@ By convention, a namespace's tests are found at a corresponding namespace
 of the same name with an added `-test` suffix. For example, tests
 for `frontend.db.model` are found in `frontend.db.model-test`.
 
-There are a couple different ways to develop with tests:
+There are a couple different ways to run tests:
+
+* [Focus tests](#focus-tests) - Run one or more tests from the CLI
+* [Autorun tests](#autorun-tests) - Autorun tests from the CLI
+* [Repl tests](#repl-tests) - Run tests from REPL
+
+There a couple types of tests and they can overlap with each other:
+
+* [Database tests](#database-tests) - Tests that involve a datascript DB.
+* [Performance tests](#performance-tests) - Tests that aim to measure and enforce a performance characteristic.
+* [Async tests](#async-tests) - Tests that run async code and require some helpers.
 
 #### Focus Tests
 
@@ -150,6 +191,15 @@ To run tests automatically on file save, run `clojure -M:test watch test
 the `:ns-regexp` option e.g. `clojure -M:test watch test --config-merge
 '{:autorun true :ns-regexp "frontend.util.page-property-test"}'`.
 
+#### REPL tests
+
+Most unit tests e.g. ones that are browser compatible and don't require node libraries, can be run from the REPL. To do so:
+
+* Start a REPL for your editor. See [here for an example](https://github.com/logseq/logseq/blob/master/docs/develop-logseq.md#repl-setup).
+* Load a test namespace.
+* Run `(cljs.test/run-tests)` to run tests for the current test namespace.
+
+
 #### Database tests
 
 To write a test that uses a datascript db:
@@ -172,7 +222,7 @@ To write a performance test:
 
 For examples of these tests, see `frontend.db.query-dsl-test` and `frontend.db.model-test`.
 
-### Async Unit Testing
+#### Async Tests
 
 Async unit testing is well supported in ClojureScript.
 https://clojurescript.org/tools/testing#async-testing is a good guide for how to
@@ -230,14 +280,53 @@ page](https://github.com/metosin/malli/blob/master/docs/clojurescript-function-i
 
 Currently the codebase is not formatted/indented consistently. We loosely follow https://github.com/bbatsov/clojure-style-guide. [cljfmt](https://cljdoc.org/d/cljfmt/) is a common formatter used for Clojure, analogous to Prettier for other languages. You can do so easily with the [Calva](https://marketplace.visualstudio.com/items?itemName=betterthantomorrow.calva) extension in [VSCode](https://code.visualstudio.com/): It will (mostly) indent your code correctly as you type, and you can move your cursor to the start of the line(s) you've written and press `Tab` to auto-indent all Clojure forms nested under the one starting on the current line.
 
+## Naming
+
+We strive to use explicit names that are self explanatory so that our codebase is readable and maintainable. Sometimes we use abbreviations for frequently occurring concepts. Some common abbreviations:
+
+* `rpath` - Relative path e.g. `logseq/config.edn`
+* `fpath` -  Full path e.g. `/full/path/to/logseq/config.edn`
+
 ## Development Tools
 
 ### Babashka tasks
 
-There are a number of bb tasks under `dev:` for developers. There are also some
-tasks under `nbb:` which are useful for inspecting database changes in realtime.
-See [these docs](https://github.com/logseq/bb-tasks#logseqbb-tasksnbbwatch) for
-more info.
+There are a number of bb tasks under `dev:` for developers. Some useful ones to
+point out:
+
+* `dev:validate-repo-config-edn` - Validate a repo config.edn
+
+  ```sh
+  bb dev:validate-repo-config-edn src/resources/templates/config.edn
+  ```
+
+* `dev:publishing` - Build a publishing app for a given graph dir. If the
+  publishing frontend is out of date, it builds that first which takes time.
+  Subsequent runs are quick.
+
+  ```sh
+  # One time setup
+  $ cd scripts && yarn install && cd -
+
+  # Build a release publishing app
+  $ bb dev:publishing /path/to/graph-dir tmp/publish
+
+  # OR build a dev publishing app that watches frontend changes
+  $ bb dev:publishing /path/to/graph-dir tmp/publish --dev
+
+  # View the publishing app in a browser
+  $ python3 -m http.server 8080 -d tmp/publish &; open http://localhost:8080
+
+  # Rebuild the publishing backend for dev/release.
+  # Handy when making backend changes in deps/publishing or
+  # to test a different graph
+  $ bb dev:publishing-backend /path/graph-dir tmp/publish
+
+  ```
+
+There are also some tasks under `nbb:` which are useful for inspecting database
+changes in realtime. See [these
+docs](https://github.com/logseq/bb-tasks#logseqbb-tasksnbbwatch) for more info.
 
 ### Dev Commands
 
@@ -250,6 +339,14 @@ inspectors for block/page data and AST.
 Since the desktop app is built with Electron, a full set of Chromium developer
 tools is available under the menu `View > Toggle Developer Tools`. Handy tools
 include a JS console and HTML inspector.
+
+## Security Practices
+
+* Our builds should not include unverified, third-party resources as this opens
+  up the app to possibly harmful injections. If a third-party resource is
+  included, it should be verified against an official distributor. Use
+  https://github.com/logseq/logseq/pull/9712 as an example to include a third
+  party resource and not the examples under resources/js/.
 
 ## FAQ
 
